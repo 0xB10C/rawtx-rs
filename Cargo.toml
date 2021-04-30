@@ -1,0 +1,18 @@
+[package]
+name = "rawtx-rs"
+version = "0.1.0"
+authors = ["0xB10C <0xb10c@gmail.com>"]
+edition = "2018"
+description = "Makes information about Bitcoin transactions accessible."
+documentation = "https://docs.rs/rawtx-rs"
+readme = "README.md"
+homepage = "https://github.com/0xB10C/rawtx-rs"
+repository = "https://github.com/0xB10C/rawtx-rs"
+license = "MIT OR Apache-2.0"
+keywords = ["bitcoin", "transaction", "information"]
+categories = ["cryptography::cryptocurrencies"]
+
+[dependencies]
+bitcoin = "0.26"
+secp256k1 = "0.19.0"
+hex = "0.4"
