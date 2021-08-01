@@ -298,7 +298,12 @@ impl Multisig for bitcoin::Script {
             return Ok(None);
         }
 
-        assert!(n <= m);
+        // If n is larger than m, the output is not considered a multisig here.
+        // This happens, for example, in the the following testnet transaction:
+        // 157c8495334e86b9422e656aa2c1a2fe977ed91fd27e2db71f6f64576f0456d9
+        if n > m {
+            return Ok(None);
+        }
 
         Ok(Some((n, m)))
     }
@@ -342,6 +347,16 @@ mod tests {
     fn multisig_opcheckmultisig_broken_2of3() {
         // A 2-of-2 script modified to have n = 2 and m = 3, but only 2 PubKeys
         let redeem_script_non_multisig = Script::from(hex::decode("522103a2ea7e0b94c48fd799bf123c1f19b50fb6d15da310db8223fd7a6afd8b03e6932102eba627e6ea5bb7e0f4c981596872d0a97d800fb836b5b3a585c3f2b99c77a0e553ae").unwrap());
+        assert_eq!(
+            redeem_script_non_multisig.get_opcheckmultisig_n_m(),
+            Ok(None)
+        )
+    }
+
+    #[test]
+    fn multisig_opcheckmultisig_broken_2of1() {
+        // A 2-of-1 script e.g. found twice in the testnet transaction 157c8495334e86b9422e656aa2c1a2fe977ed91fd27e2db71f6f64576f0456d9
+        let redeem_script_non_multisig = Script::from(hex::decode("5221021f5e6d618cf1beb74c79f42b0aae796094b3112bbe003209a2c1f757f1215bfd51ae").unwrap());
         assert_eq!(
             redeem_script_non_multisig.get_opcheckmultisig_n_m(),
             Ok(None)
