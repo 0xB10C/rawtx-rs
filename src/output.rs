@@ -41,6 +41,9 @@ pub enum OpReturnFlavor {
     Unspecified,
     WitnessCommitment,
     Omni,
+    /// Stacks version 2 blockcommit. OP_RETURN start with `X2[`.
+    /// https://forum.stacks.org/t/op-return-outputs/12000
+    StacksBlockCommit,
     Len20Byte,
     Len80Byte,
 }
@@ -51,6 +54,7 @@ impl fmt::Display for OpReturnFlavor {
             OpReturnFlavor::Unspecified => write!(f, "OP_RETURN"),
             OpReturnFlavor::WitnessCommitment => write!(f, "Witness Commitment"),
             OpReturnFlavor::Omni => write!(f, "OP_RETURN (OmniLayer)"),
+            OpReturnFlavor::StacksBlockCommit => write!(f, "OP_RETURN (Stacks v2 blockcommit)"),
             OpReturnFlavor::Len20Byte => write!(f, "OP_RETURN (20 byte)"),
             OpReturnFlavor::Len80Byte => write!(f, "OP_RETURN (80 byte)"),
         }
@@ -80,6 +84,7 @@ pub trait OutputTypeDetection {
     // OP_RETURN flavor detection
     fn is_witness_commitment(&self) -> bool;
     fn is_opreturn_omni(&self) -> bool;
+    fn is_opreturn_stacks_blockcommit(&self) -> bool;
     fn is_opreturn_with_len(&self, length: usize) -> bool;
 }
 
@@ -98,6 +103,8 @@ impl OutputTypeDetection for TxOut {
                 return OutputType::OpReturn(OpReturnFlavor::WitnessCommitment);
             } else if self.is_opreturn_omni() {
                 return OutputType::OpReturn(OpReturnFlavor::Omni);
+            } else if self.is_opreturn_stacks_blockcommit() {
+                return OutputType::OpReturn(OpReturnFlavor::StacksBlockCommit);
             } else if self.is_opreturn_with_len(20) {
                 return OutputType::OpReturn(OpReturnFlavor::Len20Byte);
             } else if self.is_opreturn_with_len(80) {
@@ -160,6 +167,27 @@ impl OutputTypeDetection for TxOut {
                 self.script_pubkey[3] == 0x6d &&
                 self.script_pubkey[4] == 0x6e &&
                 self.script_pubkey[5] == 0x69
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Checks if an output is a OP_RETURN output meeting the requirements
+    /// for a Stacks blockcommit.
+    ///
+    /// The script_pubkey of a Stacks OP_RETURN block_commit pushes 80 bytes
+    /// with 'OP_PUSHDATA1 80'. These 80 bytes start with the string 'X2'
+    /// which is 0x58 0x32 in hex followed a '[' (0x5b).
+    /// https://forum.stacks.org/t/op-return-outputs/12000
+    fn is_opreturn_stacks_blockcommit(&self) -> bool {
+        if self.script_pubkey.len() == 83
+            && self.script_pubkey[0] == 0x6A
+            && self.script_pubkey[1] == 0x4C
+            && self.script_pubkey[2] == 0x50
+            && self.script_pubkey[3] == 0x58
+            && self.script_pubkey[4] == 0x32
+            && self.script_pubkey[5] == 0x5b
         {
             return true;
         }
@@ -230,5 +258,14 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         let out2 = &tx.output[2];
         assert!(out2.is_opreturn_omni());
+    }
+
+    #[test]
+    fn output_type_detection_opreturn_stacks_blockcommmit() {
+        // mainnet 04496abaffb19abf1390b8fc94a8e487eba640c8adc385cfc951637b963fc86a
+        let raw_tx = hex::decode("01000000018d9da5a2bc0789aa38bd9e2c1248a5ddaea8f00e097748ca80695f6333adcc04030000006a47304402200704d5f943227080b0c1b8668a37d819804a5c99a0bdda593b3dc167c32a39d402207d2bbd4384e369d671f0c46a54fc4fbfeb14724ab99ea695d1184d4f1074ad18012103fb3bc5bae4c088ca38a8c68bfe741f3b1cb62a067b69917908089a2082af31aefdffffff040000000000000000536a4c5058325b1352fba61836c82246b240fb64043b3e705f8975aa2062d886e247aaeee76ad26f14f91d22c38c8c2fd41ff85e4b22b0cf97b412c53f9aa0182bd6deb51c9567000a3596004b000a2f80012b03989f0400000000001976a914000000000000000000000000000000000000000088ac989f0400000000001976a914000000000000000000000000000000000000000088ac1132920b000000001976a9142c16c83270b688fa3ac46dc69cc01f6321bce41088ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        let out2 = &tx.output[0];
+        assert!(out2.is_opreturn_stacks_blockcommit());
     }
 }
