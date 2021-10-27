@@ -1,5 +1,5 @@
 //! rawtx-rs makes information about Bitcoin transactions accessible.
-//! 
+//!
 //! # Examples
 //!
 //! ```
@@ -20,7 +20,7 @@
 //! assert!(!tx_info.is_spending_segwit());
 //! assert!(tx_info.is_bip69_compliant());
 //! ```
-//! 
+//!
 //! ```
 //! # use bitcoin::Transaction;
 //! # use bitcoin::consensus::deserialize;
@@ -40,15 +40,12 @@
 //! assert!(tx_info.is_bip69_compliant());
 //! assert!(tx_info.is_signaling_explicit_rbf_replicability());
 //! assert!(tx_info.is_spending_multisig());
-//! 
+//!
 //! let multisig_info = tx_info.input_infos[0].multisig_info.as_ref().unwrap();
-//! 
+//!
 //! // 2 of 4 multisig
 //! assert_eq!(multisig_info.m_of_n, (2, 4));
 //! ```
-
-
-
 
 pub mod input;
 pub mod output;

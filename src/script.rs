@@ -1,8 +1,8 @@
 //! Information about Bitcoin PubKeys, Signatures and MultiSig constructs.
 
+use crate::input::{InputType, InputTypeDetection};
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
-use crate::input::{InputType, InputTypeDetection};
 
 // Helper function collecting the Instructions iterator into a
 // `Vec<script::Instruction>` for easier handling.
@@ -139,7 +139,7 @@ impl SignatureInfo {
                 signature_infos.push(
                     SignatureInfo::from_u8_slice(&input.script_sig[1..], strict_der).unwrap(),
                 );
-            },
+            }
             InputType::P2ms | InputType::P2msLaxDer => {
                 // a P2MS script_sig contains up to three signatures after an
                 // initial OP_FALSE.
@@ -147,8 +147,8 @@ impl SignatureInfo {
                     signature_infos
                         .push(SignatureInfo::from_instruction(instruction, strict_der).unwrap());
                 }
-            },
-            InputType::P2pkh | InputType::P2pkhLaxDer=> {
+            }
+            InputType::P2pkh | InputType::P2pkhLaxDer => {
                 // P2PKH inputs have a signature as the first element of the
                 // script_sig.
                 signature_infos.push(
@@ -158,7 +158,7 @@ impl SignatureInfo {
                     )
                     .unwrap(),
                 );
-            },
+            }
             InputType::P2shP2wpkh => {
                 // P2SH wrapped P2WPKH inputs contain the signature as the
                 // first element of the witness.
@@ -356,7 +356,12 @@ mod tests {
     #[test]
     fn multisig_opcheckmultisig_broken_2of1() {
         // A 2-of-1 script e.g. found twice in the testnet transaction 157c8495334e86b9422e656aa2c1a2fe977ed91fd27e2db71f6f64576f0456d9
-        let redeem_script_non_multisig = Script::from(hex::decode("5221021f5e6d618cf1beb74c79f42b0aae796094b3112bbe003209a2c1f757f1215bfd51ae").unwrap());
+        let redeem_script_non_multisig = Script::from(
+            hex::decode(
+                "5221021f5e6d618cf1beb74c79f42b0aae796094b3112bbe003209a2c1f757f1215bfd51ae",
+            )
+            .unwrap(),
+        );
         assert_eq!(
             redeem_script_non_multisig.get_opcheckmultisig_n_m(),
             Ok(None)

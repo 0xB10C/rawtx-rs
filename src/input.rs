@@ -1,9 +1,9 @@
 //! Information about Bitcoin transaction inputs.
 
-use std::fmt;
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
 use bitcoin::TxIn;
+use std::fmt;
 
 use crate::script::{Multisig, PublicKey, Signature, SignatureInfo};
 
@@ -37,25 +37,37 @@ impl InputInfo {
     pub fn is_spending_nested_segwit(&self) -> bool {
         match self.in_type {
             InputType::P2shP2wpkh | InputType::P2shP2wsh => true,
-            InputType::P2pk | InputType::P2pkLaxDer
-             | InputType::P2pkh  | InputType::P2pkhLaxDer
-             | InputType::P2ms | InputType::P2msLaxDer
-             | InputType::P2wpkh | InputType::P2wsh   
-             | InputType::P2sh | InputType::Coinbase
-             | InputType::Unknown | InputType::CoinbaseWitness => false,
+            InputType::P2pk
+            | InputType::P2pkLaxDer
+            | InputType::P2pkh
+            | InputType::P2pkhLaxDer
+            | InputType::P2ms
+            | InputType::P2msLaxDer
+            | InputType::P2wpkh
+            | InputType::P2wsh
+            | InputType::P2sh
+            | InputType::Coinbase
+            | InputType::Unknown
+            | InputType::CoinbaseWitness => false,
         }
     }
 
     /// Returns true if the input spends either a native P2WPKH or a native P2WSH input
     pub fn is_spending_native_segwit(&self) -> bool {
         match self.in_type {
-            InputType::P2wpkh | InputType::P2wsh  => true,
-            InputType::P2pk | InputType::P2pkLaxDer
-             | InputType::P2pkh  | InputType::P2pkhLaxDer
-             | InputType::P2ms | InputType::P2msLaxDer
-             | InputType::P2shP2wsh | InputType::P2shP2wpkh   
-             | InputType::P2sh | InputType::Coinbase
-             | InputType::Unknown | InputType::CoinbaseWitness=> false,
+            InputType::P2wpkh | InputType::P2wsh => true,
+            InputType::P2pk
+            | InputType::P2pkLaxDer
+            | InputType::P2pkh
+            | InputType::P2pkhLaxDer
+            | InputType::P2ms
+            | InputType::P2msLaxDer
+            | InputType::P2shP2wsh
+            | InputType::P2shP2wpkh
+            | InputType::P2sh
+            | InputType::Coinbase
+            | InputType::Unknown
+            | InputType::CoinbaseWitness => false,
         }
     }
 

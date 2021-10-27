@@ -1,8 +1,8 @@
 //! Information about Bitcoin transaction outputs.
 
-use std::fmt;
-use bitcoin::{Amount, TxOut};
 use crate::script::Multisig;
+use bitcoin::{Amount, TxOut};
+use std::fmt;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct OutputInfo {

@@ -1,12 +1,12 @@
 //! Information about Bitcoin transactions.
 
-use std::collections::HashMap;
+use crate::{input, output, timelock};
 use bitcoin::blockdata::script as bitcoin_script;
 use bitcoin::hash_types::Txid;
 use bitcoin::{Amount, Transaction, TxIn, TxOut};
-use crate::{input, output, timelock};
 use input::InputInfo;
 use output::OutputInfo;
+use std::collections::HashMap;
 use timelock::LocktimeInfo;
 
 #[derive(Debug)]
@@ -19,7 +19,7 @@ pub struct TxInfo {
     pub weight: u64,
     /// Information about the transactions time-lock.
     pub locktime: LocktimeInfo,
-    /// Information about the transaction inputs. 
+    /// Information about the transaction inputs.
     pub input_infos: Vec<InputInfo>,
     /// Information about the transaction outputs.
     pub output_infos: Vec<OutputInfo>,
