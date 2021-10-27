@@ -201,7 +201,7 @@ impl OutputTypeDetection for TxOut {
     /// or equal to (<=) 75 bytes a OP_PUSHBYTES_X is used. For longer data a OP_PUSHDATA1
     /// is used.
     fn is_opreturn_with_len(&self, data_length: usize) -> bool {
-        const MIN_OPRETURN_LEN: usize = 1 + 1 + 1; // OP_RETURN OP_PUSHBYTES_1 [1 btye]
+        const MIN_OPRETURN_LEN: usize = 1 + 1; // OP_RETURN OP_0
         const MAX_OPRETURN_LEN: usize = 1 + 1 + 1 + 80; // OP_RETURN OP_PUSHDATA1 data-length [80 btyes]
         const MAX_OPPUSHBYTES_LEN: usize = 1 + 1 + 75; // OP_RETURN OP_PUSHBYTES_75 [75 bytes]
 
