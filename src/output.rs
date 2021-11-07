@@ -44,6 +44,7 @@ pub enum OpReturnFlavor {
     /// Stacks version 2 blockcommit. OP_RETURN start with `X2[`.
     /// https://forum.stacks.org/t/op-return-outputs/12000
     StacksBlockCommit,
+    Len1Byte,
     Len20Byte,
     Len80Byte,
 }
@@ -55,6 +56,7 @@ impl fmt::Display for OpReturnFlavor {
             OpReturnFlavor::WitnessCommitment => write!(f, "Witness Commitment"),
             OpReturnFlavor::Omni => write!(f, "OP_RETURN (OmniLayer)"),
             OpReturnFlavor::StacksBlockCommit => write!(f, "OP_RETURN (Stacks v2 blockcommit)"),
+            OpReturnFlavor::Len1Byte => write!(f, "OP_RETURN (0 byte)"),
             OpReturnFlavor::Len20Byte => write!(f, "OP_RETURN (20 byte)"),
             OpReturnFlavor::Len80Byte => write!(f, "OP_RETURN (80 byte)"),
         }
@@ -105,6 +107,8 @@ impl OutputTypeDetection for TxOut {
                 return OutputType::OpReturn(OpReturnFlavor::Omni);
             } else if self.is_opreturn_stacks_blockcommit() {
                 return OutputType::OpReturn(OpReturnFlavor::StacksBlockCommit);
+            } else if self.is_opreturn_with_len(1) {
+                return OutputType::OpReturn(OpReturnFlavor::Len1Byte);
             } else if self.is_opreturn_with_len(20) {
                 return OutputType::OpReturn(OpReturnFlavor::Len20Byte);
             } else if self.is_opreturn_with_len(80) {
