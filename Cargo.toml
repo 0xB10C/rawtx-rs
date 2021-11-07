@@ -13,6 +13,6 @@ keywords = ["bitcoin", "transaction", "information"]
 categories = ["cryptography::cryptocurrencies"]
 
 [dependencies]
-bitcoin = "0.26"
+bitcoin = "0.27"
 secp256k1 = "0.19.0"
 hex = "0.4"
