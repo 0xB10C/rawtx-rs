@@ -252,7 +252,7 @@ impl OutputTypeDetection for TxOut {
 
 #[cfg(test)]
 mod tests {
-    use super::{OutputType, OutputTypeDetection};
+    use super::{OutputType, OutputTypeDetection, OpReturnFlavor};
     use bitcoin::Transaction;
 
     #[test]
@@ -262,6 +262,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         let out0 = &tx.output[0];
         assert!(out0.is_p2ms());
+        assert_eq!(out0.get_type(), OutputType::P2ms);
     }
 
     #[test]
@@ -275,7 +276,9 @@ mod tests {
         assert!(out0.is_p2tr());
         assert!(out1.is_p2tr());
         assert!(out3.is_p2tr());
-        assert!(out3.get_type() == OutputType::P2tr);
+        assert_eq!(out0.get_type(), OutputType::P2tr);
+        assert_eq!(out1.get_type(), OutputType::P2tr);
+        assert_eq!(out3.get_type(), OutputType::P2tr);
     }
 
     #[test]
@@ -286,6 +289,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         let out1 = &tx.output[1];
         assert!(out1.is_witness_commitment());
+        assert_eq!(out1.get_type(), OutputType::OpReturn(OpReturnFlavor::WitnessCommitment));
     }
 
     #[test]
@@ -295,6 +299,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         let out2 = &tx.output[2];
         assert!(out2.is_opreturn_omni());
+        assert_eq!(out2.get_type(), OutputType::OpReturn(OpReturnFlavor::Omni));
     }
 
     #[test]
@@ -304,5 +309,6 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         let out2 = &tx.output[0];
         assert!(out2.is_opreturn_stacks_blockcommit());
+        assert_eq!(out2.get_type(), OutputType::OpReturn(OpReturnFlavor::StacksBlockCommit));
     }
 }

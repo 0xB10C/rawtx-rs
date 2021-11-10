@@ -441,6 +441,7 @@ impl InputTypeDetection for TxIn {
             || self.is_p2pkh(true)?
             || self.is_p2pk(true)?
             || self.is_p2ms(true)?
+            || self.is_coinbase()
             || self.script_sig.is_empty()
         {
             return Ok(false);
@@ -633,6 +634,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2pk(true).unwrap());
+        assert_eq!(in0.get_type().unwrap(), InputType::P2pk);
     }
 
     #[test]
@@ -642,6 +644,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2pkh(true).unwrap());
+        assert_eq!(in0.get_type().unwrap(), InputType::P2pkh);
     }
 
     #[test]
@@ -651,6 +654,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_nested_p2wpkh());
+        assert_eq!(in0.get_type().unwrap(), InputType::P2shP2wpkh);
     }
 
     #[test]
@@ -660,6 +664,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2wpkh());
+        assert_eq!(in0.get_type().unwrap(), InputType::P2wpkh);
     }
 
     #[test]
@@ -669,6 +674,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2sh().unwrap());
+        assert_eq!(in0.get_type().unwrap(), InputType::P2sh);
     }
 
     #[test]
@@ -678,6 +684,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_nested_p2wsh());
+        assert_eq!(in0.get_type().unwrap(), InputType::P2shP2wsh);
     }
 
     #[test]
@@ -687,7 +694,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2ms(true).unwrap());
-
+        assert_eq!(in0.get_type().unwrap(), InputType::P2ms);
         assert_eq!(
             in0.multisig_info().unwrap().unwrap(),
             MultisigInputInfo {
@@ -704,7 +711,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2ms(true).unwrap());
-
+        assert_eq!(in0.get_type().unwrap(), InputType::P2ms);
         assert_eq!(
             in0.multisig_info().unwrap().unwrap(),
             MultisigInputInfo {
@@ -721,7 +728,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2wsh());
-
+        assert_eq!(in0.get_type().unwrap(), InputType::P2wsh);
         assert_eq!(
             in0.multisig_info().unwrap().unwrap(),
             MultisigInputInfo {
@@ -738,7 +745,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2wsh());
-
+        assert_eq!(in0.get_type().unwrap(), InputType::P2wsh);
         assert_eq!(in0.multisig_info().unwrap(), None);
     }
 
@@ -749,6 +756,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_coinbase());
+        assert_eq!(in0.get_type().unwrap(), InputType::Coinbase);
     }
 
     #[test]
@@ -758,7 +766,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2trkp());
-        assert!(in0.get_type().unwrap() == InputType::P2trkp);
+        assert_eq!(in0.get_type().unwrap(), InputType::P2trkp);
     }
 
     #[test]
@@ -768,7 +776,7 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_p2trsp());
-        assert!(in0.get_type().unwrap() == InputType::P2trsp);
+        assert_eq!(in0.get_type().unwrap(), InputType::P2trsp);
     }
 
     #[test]
@@ -778,5 +786,6 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_coinbase_witness());
+        assert_eq!(in0.get_type().unwrap(), InputType::CoinbaseWitness);
     }
 }
