@@ -44,15 +44,25 @@ pub trait Signature {
     fn is_signature(&self) -> bool {
         self.is_ecdsa_signature(false)
     }
-    /// Checks if the underlying bytes represent a valid Bitcoin ECDSA signature.
-    /// This function expects the SighHash
+    /// Checks if the underlying bytes represent a Bitcoin ECDSA signature.
+    /// This function expects that the SigHash is included.
     fn is_ecdsa_signature(&self, strict_der: bool) -> bool;
+
+    /// Checks if the underlying bytes represent a Bitcoin Schnoor signature.
+    /// This function expects that the SigHash is included.
+    fn is_schnorr_signature(&self) -> bool;
 }
 
 impl Signature for script::Instruction<'_> {
     fn is_ecdsa_signature(&self, strict_der: bool) -> bool {
         match self {
             script::Instruction::PushBytes(bytes) => bytes.to_vec().is_ecdsa_signature(strict_der),
+            script::Instruction::Op(_) => false,
+        }
+    }
+    fn is_schnorr_signature(&self) -> bool {
+        match self {
+            script::Instruction::PushBytes(bytes) => bytes.to_vec().is_schnorr_signature(),
             script::Instruction::Op(_) => false,
         }
     }
@@ -71,12 +81,28 @@ impl Signature for Vec<u8> {
             }
         }
     }
+
+    fn is_schnorr_signature(&self) -> bool {
+        if self.len() == 64 {
+            // As long as we see excatly 64 bytes here, we assume it's a Schnoor signature.
+            return true;
+        } else if self.len() == 65 {
+            let sighash = self.last().unwrap();
+            return *sighash == 0x01u8
+                || *sighash == 0x02u8
+                || *sighash == 0x03u8
+                || *sighash == 0x81u8
+                || *sighash == 0x82u8
+                || *sighash == 0x83u8;
+        }
+        false
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum SignatureType {
     Ecdsa,
-    Schnoor,
+    Schnorr,
 }
 
 // Contains information about a Bitcoin signature.
@@ -88,27 +114,40 @@ pub struct SignatureInfo {
 }
 
 impl SignatureInfo {
-    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin Signature,
+    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
     // otherwise None is returned.
-    pub fn from_instruction(
+    pub fn from_instruction_ecdsa(
         instruction: &script::Instruction,
         strict_der: bool,
     ) -> Option<SignatureInfo> {
         if instruction.is_ecdsa_signature(strict_der) {
             match instruction {
                 script::Instruction::PushBytes(bytes) => {
-                    return SignatureInfo::from_u8_slice(bytes, strict_der);
+                    return SignatureInfo::from_u8_slice_ecdsa(bytes, strict_der);
                 }
                 script::Instruction::Op(_) => return None,
             }
         }
-        // TODO: implement Schnoor as else if
         None
     }
 
-    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin Signature,
+    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin Schnorr Signature,
     // otherwise None is returned.
-    pub fn from_u8_slice(bytes: &[u8], strict_der: bool) -> Option<SignatureInfo> {
+    pub fn from_instruction_schnorr(instruction: &script::Instruction) -> Option<SignatureInfo> {
+        if instruction.is_schnorr_signature() {
+            match instruction {
+                script::Instruction::PushBytes(bytes) => {
+                    return SignatureInfo::from_u8_slice_schnorr(bytes);
+                }
+                script::Instruction::Op(_) => return None,
+            }
+        }
+        None
+    }
+
+    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
+    // otherwise None is returned.
+    pub fn from_u8_slice_ecdsa(bytes: &[u8], strict_der: bool) -> Option<SignatureInfo> {
         if bytes.to_vec().is_ecdsa_signature(strict_der) {
             return Some(SignatureInfo {
                 sig_type: SignatureType::Ecdsa,
@@ -116,7 +155,25 @@ impl SignatureInfo {
                 length: bytes.len(),
             });
         }
-        // TODO: implement Schnoor as else if
+        None
+    }
+
+    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
+    // otherwise None is returned.
+    pub fn from_u8_slice_schnorr(bytes: &[u8]) -> Option<SignatureInfo> {
+        if bytes.to_vec().is_schnorr_signature() {
+            let sighash: u8;
+            if bytes.len() == 64 {
+                sighash = 0x01u8;
+            } else {
+                sighash = *bytes.last().unwrap();
+            }
+            return Some(SignatureInfo {
+                sig_type: SignatureType::Schnorr,
+                sig_hash: sighash,
+                length: bytes.len(),
+            });
+        }
         None
     }
 
@@ -137,22 +194,23 @@ impl SignatureInfo {
                 // the first byte is a PUSH_BYTES_XX followed by the bytes of the
                 // signature.
                 signature_infos.push(
-                    SignatureInfo::from_u8_slice(&input.script_sig[1..], strict_der).unwrap(),
+                    SignatureInfo::from_u8_slice_ecdsa(&input.script_sig[1..], strict_der).unwrap(),
                 );
             }
             InputType::P2ms | InputType::P2msLaxDer => {
                 // a P2MS script_sig contains up to three signatures after an
                 // initial OP_FALSE.
                 for instruction in instructions_as_vec(&input.script_sig)?[1..].iter() {
-                    signature_infos
-                        .push(SignatureInfo::from_instruction(instruction, strict_der).unwrap());
+                    signature_infos.push(
+                        SignatureInfo::from_instruction_ecdsa(instruction, strict_der).unwrap(),
+                    );
                 }
             }
             InputType::P2pkh | InputType::P2pkhLaxDer => {
                 // P2PKH inputs have a signature as the first element of the
                 // script_sig.
                 signature_infos.push(
-                    SignatureInfo::from_instruction(
+                    SignatureInfo::from_instruction_ecdsa(
                         &instructions_as_vec(&input.script_sig)?[0],
                         strict_der,
                     )
@@ -162,14 +220,16 @@ impl SignatureInfo {
             InputType::P2shP2wpkh => {
                 // P2SH wrapped P2WPKH inputs contain the signature as the
                 // first element of the witness.
-                signature_infos
-                    .push(SignatureInfo::from_u8_slice(&input.witness[0], strict_der).unwrap());
+                signature_infos.push(
+                    SignatureInfo::from_u8_slice_ecdsa(&input.witness[0], strict_der).unwrap(),
+                );
             }
             InputType::P2wpkh => {
                 // P2WPKH inputs contain the signature as the first element of
                 // the witness.
-                signature_infos
-                    .push(SignatureInfo::from_u8_slice(&input.witness[0], strict_der).unwrap())
+                signature_infos.push(
+                    SignatureInfo::from_u8_slice_ecdsa(&input.witness[0], strict_der).unwrap(),
+                )
             }
             InputType::P2sh => {
                 // P2SH inputs can contain zero or multiple signatures in
@@ -178,7 +238,7 @@ impl SignatureInfo {
                 let instructions = instructions_as_vec(&input.script_sig)?;
                 for instruction in instructions[..instructions.len() - 1].iter() {
                     if let Some(signature_info) =
-                        SignatureInfo::from_instruction(instruction, strict_der)
+                        SignatureInfo::from_instruction_ecdsa(instruction, strict_der)
                     {
                         signature_infos.push(signature_info);
                     }
@@ -189,7 +249,9 @@ impl SignatureInfo {
                 // the witness. It's very uncommon that signatures are placed
                 // in the witness (redeem) script.
                 for bytes in input.witness[..input.witness.len() - 1].iter() {
-                    if let Some(signature_info) = SignatureInfo::from_u8_slice(bytes, strict_der) {
+                    if let Some(signature_info) =
+                        SignatureInfo::from_u8_slice_ecdsa(bytes, strict_der)
+                    {
                         signature_infos.push(signature_info);
                     }
                 }
@@ -199,7 +261,25 @@ impl SignatureInfo {
                 // the witness. It's very uncommon that signatures are placed
                 // in the witness (redeem) script.
                 for bytes in input.witness[..input.witness.len() - 1].iter() {
-                    if let Some(signature_info) = SignatureInfo::from_u8_slice(bytes, strict_der) {
+                    if let Some(signature_info) =
+                        SignatureInfo::from_u8_slice_ecdsa(bytes, strict_der)
+                    {
+                        signature_infos.push(signature_info);
+                    }
+                }
+            }
+            InputType::P2trkp => {
+                // P2TR key-path spends contain exactly one Schnorr signature in the
+                // witness.
+                signature_infos
+                    .push(SignatureInfo::from_u8_slice_schnorr(&input.witness[0]).unwrap())
+            }
+            InputType::P2trsp => {
+                // P2TR script-path spends contain zero or multiple signatures in the witness.
+                // There can't be any signatures in the annex, control block or script part.
+                // https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki#script-validation-rules
+                for bytes in input.witness[..input.witness.len() - 2].iter() {
+                    if let Some(signature_info) = SignatureInfo::from_u8_slice_schnorr(bytes) {
                         signature_infos.push(signature_info);
                     }
                 }
