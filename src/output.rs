@@ -1,7 +1,7 @@
 //! Information about Bitcoin transaction outputs.
 
 use crate::script::Multisig;
-use bitcoin::{Amount, TxOut};
+use bitcoin::{blockdata::opcodes::all as opcodes, Amount, TxOut};
 use std::fmt;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -33,6 +33,7 @@ pub enum OutputType {
     P2sh,
     P2wshV0,
     OpReturn(OpReturnFlavor),
+    P2tr,
     Unknown,
 }
 
@@ -73,6 +74,7 @@ impl fmt::Display for OutputType {
             OutputType::P2sh => write!(f, "P2SH"),
             OutputType::P2wshV0 => write!(f, "P2WSH v0"),
             OutputType::OpReturn(flavor) => write!(f, "{}", flavor),
+            OutputType::P2tr => write!(f, "P2TR"),
             OutputType::Unknown => write!(f, "UNKNOWN"),
         }
     }
@@ -82,6 +84,7 @@ pub trait OutputTypeDetection {
     fn get_type(&self) -> OutputType;
 
     fn is_p2ms(&self) -> bool;
+    fn is_p2tr(&self) -> bool;
 
     // OP_RETURN flavor detection
     fn is_witness_commitment(&self) -> bool;
@@ -100,6 +103,8 @@ impl OutputTypeDetection for TxOut {
             OutputType::P2wpkhV0
         } else if self.script_pubkey.is_v0_p2wsh() {
             OutputType::P2wshV0
+        } else if self.is_p2tr() {
+            OutputType::P2tr
         } else if self.script_pubkey.is_op_return() {
             if self.is_witness_commitment() {
                 return OutputType::OpReturn(OpReturnFlavor::WitnessCommitment);
@@ -137,6 +142,20 @@ impl OutputTypeDetection for TxOut {
             if n <= 3 && m <= 3 && m >= n {
                 return true;
             }
+        }
+        false
+    }
+
+    /// Checks if an output pays to a P2TR script.
+    ///
+    /// A P2TR output pushes the witness version 1 followed by a 32-byte schnorr-pubkey
+    /// `script_pubkey: [ OP_PUSHNUM_1  <32-byte pubkey> ]`
+    fn is_p2tr(&self) -> bool {
+        if self.script_pubkey.len() == 34
+            && self.script_pubkey[0] == opcodes::OP_PUSHNUM_1.into_u8()
+            && self.script_pubkey[1] == opcodes::OP_PUSHBYTES_32.into_u8()
+        {
+            return true;
         }
         false
     }
@@ -233,7 +252,7 @@ impl OutputTypeDetection for TxOut {
 
 #[cfg(test)]
 mod tests {
-    use super::OutputTypeDetection;
+    use super::{OutputType, OutputTypeDetection};
     use bitcoin::Transaction;
 
     #[test]
@@ -243,6 +262,20 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         let out0 = &tx.output[0];
         assert!(out0.is_p2ms());
+    }
+
+    #[test]
+    fn output_type_detection_p2tr() {
+        // signet 9f3d438ab92e86bd86c64749416df8d3a48bcef97b7c32ccefc2ec4f02caac74
+        let raw_tx = hex::decode("020000000001029dac93ef467e6035bf641f4076b2a8ac6a4368e93d6c7dc8dcfb38b9bed7da840100000000feffffffbe415b1058e5294f30ccc12332d00636aa8874448141a0446737a1ffc7e6f5060100000000feffffff0410270000000000002251207a61c588fd357d8ed58f624fa7f97a651d1ac00b53b055e9b852507dd319a3d41027000000000000225120acd385f4c428f2ce97644de474a579a77435f40b6161d1c1875f48f2626fccde1e0e1e00000000001600147f611a8cfa64617c05c1b44341b4e469631371c3102700000000000022512070271d98a521d0e4102ebdbc40f3e553666fb5b85c8c3d2709138568c6c90b230247304402202945170a29517bf8773f6a741e587d87b3f4ec6e7348fae8443d45bc5a30f82402200207fcdb3369e55060725bdc2343236271e2dddb62a3077577a85e6f79d22404012103f682085f03c8a27288258933370b4cef8badb4c8a0e8bbfa31d78a450dffd543024730440220711d103aaed2122a8ddef8fd5523ccc7e3748382804dddccdf46e4755c2d1e9f022060e0564f3bf307d5c2128a4bcfd521c33a2bf1c3590cfc0d4fa7c8e02af26ab4012103f682085f03c8a27288258933370b4cef8badb4c8a0e8bbfa31d78a450dffd54300000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        let out0 = &tx.output[0];
+        let out1 = &tx.output[1];
+        let out3 = &tx.output[3];
+        assert!(out0.is_p2tr());
+        assert!(out1.is_p2tr());
+        assert!(out3.is_p2tr());
+        assert!(out3.get_type() == OutputType::P2tr);
     }
 
     #[test]
