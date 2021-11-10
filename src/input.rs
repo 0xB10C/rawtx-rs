@@ -7,6 +7,10 @@ use std::fmt;
 
 use crate::script::{Multisig, PublicKey, Signature, SignatureInfo};
 
+pub const TAPROOT_ANNEX_INDICATOR: u8 = 0x50;
+pub const TAPROOT_LEAF_TAPSCRIPT: u8 = 0xc0;
+pub const TAPROOT_LEAF_MASK: u8 = 0xfe;
+
 #[derive(Debug)]
 pub struct InputInfo {
     pub in_type: InputType,
@@ -45,6 +49,8 @@ impl InputInfo {
             | InputType::P2msLaxDer
             | InputType::P2wpkh
             | InputType::P2wsh
+            | InputType::P2trkp
+            | InputType::P2trsp
             | InputType::P2sh
             | InputType::Coinbase
             | InputType::Unknown
@@ -55,7 +61,7 @@ impl InputInfo {
     /// Returns true if the input spends either a native P2WPKH or a native P2WSH input
     pub fn is_spending_native_segwit(&self) -> bool {
         match self.in_type {
-            InputType::P2wpkh | InputType::P2wsh => true,
+            InputType::P2wpkh | InputType::P2wsh | InputType::P2trkp | InputType::P2trsp => true,
             InputType::P2pk
             | InputType::P2pkLaxDer
             | InputType::P2pkh
@@ -184,6 +190,8 @@ pub trait InputTypeDetection {
     fn is_nested_p2wsh(&self) -> bool;
     fn is_p2wpkh(&self) -> bool;
     fn is_p2wsh(&self) -> bool;
+    fn is_p2trkp(&self) -> bool;
+    fn is_p2trsp(&self) -> bool;
     fn is_coinbase(&self) -> bool;
     fn is_coinbase_witness(&self) -> bool;
 }
@@ -218,7 +226,10 @@ pub enum InputType {
     P2shP2wsh,
     /// Pay-to-Witness-Script-Hash input
     P2wsh,
-    // TODO Pay To Taproot Spend https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki
+    /// Pay-to-Taproot key path input
+    P2trkp,
+    /// Pay-to-Taproot script path input
+    P2trsp,
     /// Coinbase transaction input
     Coinbase,
     /// Coinbase transaction input with a witness
@@ -241,6 +252,8 @@ impl fmt::Display for InputType {
             InputType::P2sh => write!(f, "P2SH"),
             InputType::P2shP2wsh => write!(f, "P2SH-P2WSH"),
             InputType::P2wsh => write!(f, "P2WSH"),
+            InputType::P2trkp => write!(f, "P2TR key-path"),
+            InputType::P2trsp => write!(f, "P2TR script-path"),
             InputType::Coinbase => write!(f, "Coinbase"),
             InputType::CoinbaseWitness => write!(f, "Coinbase with Wittness"),
             InputType::Unknown => write!(f, "UNKNOWN"),
@@ -259,6 +272,10 @@ impl InputTypeDetection for TxIn {
                 return Ok(InputType::P2shP2wsh);
             } else if self.is_p2wsh() {
                 return Ok(InputType::P2wsh);
+            } else if self.is_p2trkp() {
+                return Ok(InputType::P2trkp);
+            } else if self.is_p2trsp() {
+                return Ok(InputType::P2trsp);
             } else if self.is_coinbase_witness() {
                 return Ok(InputType::CoinbaseWitness);
             }
@@ -507,11 +524,72 @@ impl InputTypeDetection for TxIn {
     /// `script_sig: [ ]`
     /// `witness: [ .. ]`
     fn is_p2wsh(&self) -> bool {
-        if !self.script_sig.is_empty() || !self.has_witness() || self.is_p2wpkh() {
+        if !self.script_sig.is_empty()
+            || !self.has_witness()
+            || self.is_p2wpkh()
+            || self.is_p2trkp()
+            || self.is_p2trsp()
+        {
             return false;
         }
 
         true
+    }
+
+    /// Checks if an input spends a P2TR-keypath output.
+    ///
+    /// A P2TR output has an empty script_sig. The witness contains a Schnorr signature
+    /// and optionally an annex.
+    /// `script_sig: [ ]`
+    /// `witness: [ <schnorr signature> (<annex>) ]`
+    fn is_p2trkp(&self) -> bool {
+        if !self.script_sig.is_empty() || !self.has_witness() || self.witness.len() > 2 {
+            return false;
+        }
+        if self.witness.len() == 1 {
+            // without annex
+            return self.witness[0].is_schnorr_signature();
+        } else if self.witness.len() == 2 {
+            // with annex
+            if !self.witness[1].is_empty() && self.witness[1][0] == TAPROOT_ANNEX_INDICATOR {
+                return self.witness[0].is_schnorr_signature();
+            }
+        }
+        false
+    }
+
+    /// Checks if an input spends a P2TR-scriptpath output.
+    ///
+    /// A P2TR output has an empty script_sig. The witness script-input-data (zero-to-many),
+    /// a script, a control block, and optionally an annex.
+    /// `script_sig: [ ]`
+    /// `witness: [ (<script input data>, <script input data>, ...) <script> <control block> (<annex>) ]`
+    fn is_p2trsp(&self) -> bool {
+        if !self.script_sig.is_empty() || !self.has_witness() || self.witness.len() < 2 {
+            return false;
+        }
+
+        let last_witness_element_index = self.witness.len() - 1;
+        let mut control_block_index = last_witness_element_index;
+
+        // check for annex
+        if !self.witness[last_witness_element_index].is_empty()
+            && self.witness[last_witness_element_index][0] == TAPROOT_ANNEX_INDICATOR
+        {
+            control_block_index -= 1;
+        }
+
+        // check for control block
+        let control_block = &self.witness[control_block_index];
+        if control_block.len() < 1 + 32 || (control_block.len() - 1) % 32 != 0 {
+            return false;
+        }
+
+        if control_block[0] & TAPROOT_LEAF_MASK == TAPROOT_LEAF_TAPSCRIPT {
+            return true;
+        }
+
+        false
     }
 
     /// Checks if an input is a coinbase without witness data.
@@ -545,7 +623,7 @@ impl InputTypeDetection for TxIn {
 
 #[cfg(test)]
 mod tests {
-    use super::{InputMultisigDetection, InputTypeDetection, MultisigInputInfo};
+    use super::{InputMultisigDetection, InputType, InputTypeDetection, MultisigInputInfo};
     use bitcoin::Transaction;
 
     #[test]
@@ -671,6 +749,26 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_coinbase());
+    }
+
+    #[test]
+    fn p2trkp_input_detection() {
+        // signet 75a1a2488770ba0506b9899b1d03dc232f5b22f00dffc3ca3ea6640a53de8403
+        let rawtx = hex::decode("0200000000010232b1c6063448c8089d4e7a500399555daec6bc1f3fef281016518c1de3d154cb0000000000feffffff32b1c6063448c8089d4e7a500399555daec6bc1f3fef281016518c1de3d154cb0100000000feffffff02301b0f00000000002251204b03959143386c56a1646c9d1002314c6acecd79ee0f0976fb9fa0f1f0837b1be31f0000000000001600140af8bb24c9504e8740076bb07b755237d4af6e67014159f6076cc04503a9bc72f137aa4af523ab05f5805b5fcb9e0b0b0f258a86afd30c7298e11203f6f27a1408385ec5b9fc1d16be738d628a4aac62eef1cfdac10b0102473044022044d39c6b67334c5e1aa0be056b2200221f8ec84e7319ba1b1cbe6df4dc2f6b1d02207289dd7e3d362355f22ff1df76965391ccd9c4d529a216947d2434f16dfd9b7901210338008b55bf51d06440c64129665a56c2eb828fdad50cca74191d29f92475e962b5680000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let in0 = &tx.input[0];
+        assert!(in0.is_p2trkp());
+        assert!(in0.get_type().unwrap() == InputType::P2trkp);
+    }
+
+    #[test]
+    fn p2trsp_input_detection() {
+        // signet 692937bb7864cfcce9f7a5171d6af3646bf479204ffb9356a0d6ce8a4a7952f1
+        let rawtx = hex::decode("02000000000101e1e91316b8780879bf5ac7559cbb3da5c65f19e57ed822615d832c53b2eeb5360000000000ffffffff01905f010000000000160014734e7298bfe985c5e0148a5a37179b66d9ad0b0804400d1e89bad817848056c3f32b4226f70946b84d358ff5a635b70f7ce40a43a94eba9b8ce213bc56d8ab6f9bb2f90d700cfed82fd93d91f41e7b3cf27c5b3ea77b20107661134f21fc7c02223d50ab9eb3600bc3ffc3712423a1e47bb1f9a9dbf55f45a8206c60f404f8167a38fc70eaf8aa17ac351023bef86bcb9d1086a19afe95bd533388204edfcf9dfe6c0b5c83d1ab3f78d1b39a46ebac6798e08e19761f5ed89ec83c10ac41c1f30544d6009c8d8d94f5d030b2e844b1a3ca036255161c479db1cca5b374dd1cc81451874bd9ebd4b6fd4bba1f84cdfb533c532365d22a0a702205ff658b17c900000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let in0 = &tx.input[0];
+        assert!(in0.is_p2trsp());
+        assert!(in0.get_type().unwrap() == InputType::P2trsp);
     }
 
     #[test]
