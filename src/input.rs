@@ -37,6 +37,11 @@ impl InputInfo {
         self.is_spending_nested_segwit() | self.is_spending_native_segwit()
     }
 
+    /// Returns true if the input spends Taproot either with a key-path or script-path spend.
+    pub fn is_spending_taproot(&self) -> bool {
+        self.in_type == InputType::P2trkp || self.in_type == InputType::P2trsp
+    }
+
     /// Returns true if the input spends either a P2SH nested P2WPKH or a P2SH nested P2WSH input
     pub fn is_spending_nested_segwit(&self) -> bool {
         match self.in_type {
@@ -624,7 +629,7 @@ impl InputTypeDetection for TxIn {
 
 #[cfg(test)]
 mod tests {
-    use super::{InputMultisigDetection, InputType, InputTypeDetection, MultisigInputInfo};
+    use super::{InputMultisigDetection, InputType, InputTypeDetection, MultisigInputInfo, InputInfo};
     use bitcoin::Transaction;
 
     #[test]
@@ -767,6 +772,7 @@ mod tests {
         let in0 = &tx.input[0];
         assert!(in0.is_p2trkp());
         assert_eq!(in0.get_type().unwrap(), InputType::P2trkp);
+        assert!(InputInfo::new(in0).unwrap().is_spending_taproot());
     }
 
     #[test]
@@ -777,6 +783,7 @@ mod tests {
         let in0 = &tx.input[0];
         assert!(in0.is_p2trsp());
         assert_eq!(in0.get_type().unwrap(), InputType::P2trsp);
+        assert!(InputInfo::new(in0).unwrap().is_spending_taproot());
     }
 
     #[test]

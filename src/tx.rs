@@ -72,6 +72,11 @@ impl TxInfo {
         self.input_infos.iter().any(|i| i.is_spending_segwit())
     }
 
+    /// Returns true if at least one input spends a Taproot output.
+    pub fn is_spending_taproot(&self) -> bool {
+        self.input_infos.iter().any(|i| i.is_spending_taproot())
+    }
+
     /// Returns true if at least one input spends nested SegWit.
     pub fn is_spending_nested_segwit(&self) -> bool {
         self.input_infos
