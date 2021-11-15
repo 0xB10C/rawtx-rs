@@ -260,7 +260,7 @@ impl fmt::Display for InputType {
             InputType::P2trkp => write!(f, "P2TR key-path"),
             InputType::P2trsp => write!(f, "P2TR script-path"),
             InputType::Coinbase => write!(f, "Coinbase"),
-            InputType::CoinbaseWitness => write!(f, "Coinbase with Wittness"),
+            InputType::CoinbaseWitness => write!(f, "Coinbase with Witness"),
             InputType::Unknown => write!(f, "UNKNOWN"),
         }
     }
