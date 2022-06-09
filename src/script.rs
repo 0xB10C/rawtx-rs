@@ -111,6 +111,8 @@ pub struct SignatureInfo {
     pub sig_type: SignatureType,
     pub sig_hash: u8,
     pub length: usize,
+    /// The full, raw signature.
+    pub signature: Vec<u8>,
 }
 
 impl SignatureInfo {
@@ -153,6 +155,7 @@ impl SignatureInfo {
                 sig_type: SignatureType::Ecdsa,
                 sig_hash: *bytes.last().unwrap(),
                 length: bytes.len(),
+                signature: bytes.to_vec(),
             });
         }
         None
@@ -172,6 +175,7 @@ impl SignatureInfo {
                 sig_type: SignatureType::Schnorr,
                 sig_hash: sighash,
                 length: bytes.len(),
+                signature: bytes.to_vec(),
             });
         }
         None
