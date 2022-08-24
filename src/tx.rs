@@ -115,7 +115,7 @@ impl TxInfo {
         self.input_infos.iter().any(|i| i.is_spending_multisig())
     }
 
-    /// Returns true if at least one input spends native SegWit.
+    /// Returns true if at the inputs and outputs are sorted according to BIP-69.
     pub fn is_bip69_compliant(&self) -> bool {
         self.is_bip69_compliant
     }
