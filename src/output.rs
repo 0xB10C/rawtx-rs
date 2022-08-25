@@ -131,7 +131,7 @@ impl OutputTypeDetection for TxOut {
 
     /// Checks if an output pays to a P2MS script.
     ///
-    /// A P2MS output as a standard OP_CHECKMULTSIG template as usually seen in
+    /// A P2MS output has a standard OP_CHECKMULTSIG template as usually seen in
     /// e.g. P2SH redeemscripts as script_pubkey. N and M (n-of-m) can't be
     /// bigger than 3 and m must be bigger than or equal to n;
     /// `script_pubkey: [ <OP_PUSHNUM_N>   M * <pubkey>   <OP_PUSHNUM_M> <OP_CHECKMULTISIG> ]`
