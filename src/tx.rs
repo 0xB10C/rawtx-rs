@@ -5,9 +5,16 @@ use bitcoin::blockdata::script as bitcoin_script;
 use bitcoin::hash_types::Txid;
 use bitcoin::{Amount, Transaction, TxIn, TxOut};
 use input::InputInfo;
-use output::OutputInfo;
+use output::{OutputInfo, OutputTypeDetection};
 use std::collections::HashMap;
 use timelock::LocktimeInfo;
+
+#[cfg(feature = "counterparty")]
+use crate::script::{instructions_as_vec, Multisig};
+#[cfg(feature = "counterparty")]
+use bitcoin::blockdata::script::Instruction;
+#[cfg(feature = "counterparty")]
+use rc4::{consts::U32, Key, KeyInit, Rc4, StreamCipher};
 
 #[derive(Debug)]
 pub struct TxInfo {
@@ -209,10 +216,110 @@ fn is_bip69_compliant(inputs: &[TxIn], outputs: &[TxOut]) -> bool {
     inputs_sorted && outputs_sorted
 }
 
+#[cfg(feature = "counterparty")]
+/// Returns true if the transaction is an OP_RETURN CounterParty transaction.
+pub fn is_opreturn_counterparty(tx: &Transaction) -> bool {
+    if tx.is_coin_base() {
+        return false;
+    }
+
+    // find OP_RETURN output
+    for output in tx.output.iter() {
+        if output.script_pubkey.is_op_return() {
+            // check if OP_RETRUN message is long enough
+            if output.script_pubkey.len() > 1 + 1 + 8 {
+                // OP_RETURN + length + CNTRPRTY prefix
+                let first_input = match tx.input.first() {
+                    Some(input) => input,
+                    None => return false,
+                };
+
+                // CounterParty uses the human readable hex (block-explorer) representation
+                // of the txid for encryption
+                let mut first_outpoint_txid = first_input.previous_output.txid.to_vec();
+                first_outpoint_txid.reverse();
+                let key = Key::<U32>::from_slice(&first_outpoint_txid);
+
+                // expected: OP_RETURN PUSH_DATA <payload>
+                // drop the OP_RETURN and PUSH_DATA here
+                let mut payload = output.script_pubkey.clone()[2..].to_vec();
+
+                // decrypt the payload with the txid as key
+                let mut rc4 = Rc4::new(key);
+                rc4.apply_keystream(&mut payload);
+                return payload.starts_with(&[0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59]);
+            }
+        }
+    }
+    false
+}
+
+#[cfg(feature = "counterparty")]
+/// Returns true if the transaction is a multisig (P2MS) CounterParty transaction.
+pub fn is_p2ms_counterparty(tx: &Transaction) -> bool {
+    if tx.is_coin_base() {
+        return false;
+    }
+
+    // find P2MS output
+    for output in tx.output.iter() {
+        if output.is_p2ms() {
+            if let Ok(Some(n_of_m)) = output.script_pubkey.get_opcheckmultisig_n_m() {
+                // for CounterParty, n == 1 and m == 3
+                if n_of_m.0 == 1 && n_of_m.1 == 3 {
+                    if let Ok(instructions) = instructions_as_vec(&output.script_pubkey) {
+                        // expected: OP_PUSHNUM_1 PUSH(<pk1>) PUSH(<pk2>) PUSH(<pk3>) OP_PUSHNUM_3 OP_CHECKMULTISIG
+                        if instructions.len() != 6 {
+                            return false;
+                        }
+
+                        let first_pubkey = match instructions[1] {
+                            Instruction::PushBytes(x) => x,
+                            Instruction::Op(_) => return false,
+                        };
+
+                        let first_input = match tx.input.first() {
+                            Some(input) => input,
+                            None => return false,
+                        };
+
+                        // CounterParty uses the human readable hex (block-explorer) representation
+                        // of the txid for encryption
+                        let mut first_outpoint_txid = first_input.previous_output.txid.to_vec();
+                        first_outpoint_txid.reverse();
+                        let key = Key::<U32>::from_slice(&first_outpoint_txid);
+
+                        // expected: PUBKEYMARKER (02 or 03) and payload
+                        // drop the PUBKEYMARKER
+                        let mut payload: Vec<u8> = first_pubkey[1..].into();
+
+                        // decrypt the payload with the txid as key
+                        let mut rc4 = Rc4::new(key);
+                        rc4.apply_keystream(&mut payload);
+
+                        // expected: PAYLOAD_LENGTH + PAYLOAD
+                        // drop PAYLOAD_LENGTH
+                        return payload[1..]
+                            .starts_with(&[0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59]);
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::TxInfo;
     use bitcoin::Transaction;
+
+    #[cfg(feature = "counterparty")]
+    use crate::tx::is_opreturn_counterparty;
+    #[cfg(feature = "counterparty")]
+    use crate::tx::is_p2ms_counterparty;
 
     #[test]
     fn bip69_compliance_1in_1out() {
@@ -236,5 +343,34 @@ mod tests {
         let raw_tx = hex::decode("02000000000103edfe97964f954656db279834f3fb810cf2868c26f1fe5fd2fd3bb6d293da80500100000017160014517f3e10051df116600af7f322ebad1eb0834676ffffffff6a5d444fe88ef03df7d8062c429850286c434cb9ee77947b6e73dc34e200ef040000000017160014c2af9fdf9f2e8dbe406163e1b3c22c4a98c22bccffffffff1df2a57be954c93f002d4d272616ebbe7952ec100fd77e8c9118a4df88ae694a0000000017160014fc89a4451ba56e5511aac20a634206391f267120ffffffff03a13f05000000000017a914acb331118b1b1d233dc5ee3972d8b0eb10a389648748d104000000000017a914e416571b39ca465e70ca21c4401925a2d53c9cd687823b9e000000000017a9144ff5174680c12f362699f4186e822e64c0f741ca8702473044022017f06d1a4baf4783566f5a751c3f5239d896728e26a34b484d5b804a83571b31022038e76fa397eae5644651a0c7c1fa8b4533f4df061d315ac4794669958e7afb3e0121032adeb16dc182591e03bbd57f68bbee23d1d2b95315103008ee7b2afc8151d8a00247304402200fadb196510acc654ddbd3b3be87051e0db8bf58a003f07628be44a666a2bc2102200e8010a7abdf6c635f5a3ec7ab06c2d4e7ce520e99a617724349025b588b52630121027c9b7d4b9789bdc5fdd4e170d593619bd185b376d53eaca3463f3925ca8047af024730440220486e51ace259a49ff14fd069b3c2ae4890da290651a9f364dbe352b67aee10d402203dc2f37182ed5bae92ebed04d531d7e34c6e1dc17e8ecaa60f83b054f967827401210295dec103680805c7934cde983acdbb3224119bfa770814808f98c651655d764a00000000").unwrap();
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         assert!(!TxInfo::new(&tx).unwrap().is_bip69_compliant());
+    }
+
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_opreturn_counterparty_tx() {
+        // mainnet e08c3d808317731ef6040799646de2f567590ff890c8fe920a12e36502d8ceb0
+        let raw_tx = hex::decode("0100000001c05b048e0964c3db4a87c33e00503ccdc3d7bff75892639029ba311ce7829745010000006b483045022100df78463aa570274bb2be52ee7410265f5165c0f9f00fb67285582a3e365711ed022074eb1c368569164bb1ad4bca9833b8398e1bb90409e58ac92a98d5ecd117e7e4012103a6e6e5baa76d34499b6b895bccf5a7b5f0d6b264637dd1cddad72cea2c4a1499ffffffff0200000000000000004b6a49f7032ee8d7f20e860d177068a124158cebaa066a209a916e2e6fa26637468bfa7742f6c58724fb1d36aa209aa394245b94afbe385df237e9c4821c6e9d8b9c234f8de5c68760561d03ebd0eb01000000001976a9142e9943921a473dee1e04a579c1762ff6e9ac34e488ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        assert!(is_opreturn_counterparty(&tx));
+
+        // mainnet 229028368caadfbab2654f888e919062f117e24da5b3a1974ea9796162191a56
+        let raw_tx = hex::decode("01000000011378419519eebd4034e6eae696e98eee4f247f2103394740844a1cc5462fa465010000006b483045022100f592b2df2e8b9dcf6bc77bd0e8cc1064b74c6119cfb3482f96d03d1442d60f82022040372b55fd7aba6d7474ddce7e6d6a7b9219018e925e31379d06f4216104e51e0121021f6dc395418fed2bce5eb47485b2945e3681ba0a690c57779b09f4b15cb66afbffffffff020000000000000000386a36a61966fd345606c378b4ccd3596ab28200b3cb90398c0babbd1ef635a6dfd106e89794feae9a58d7700e6d3b41782e2181118a94eb9117390000000000001976a914bcb7dadb45b78b33653d38789ac14d54dff6de1388ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        assert!(is_opreturn_counterparty(&tx));
+    }
+
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_p2ms_counterparty_tx() {
+        // mainnet cf01557d4e6b0eec45d07d871e37253285e33672a3a9c0708a593c096ea98e16
+        let raw_tx = hex::decode("0100000001b731c05ddc859c44326689fb588e81e054def1baff4cdc368a038abc26e9b197010000008b483045022100926a2470ccee567d806fd9697dbcb8b2ae5525888403132ab6da2bc66b36e8500220170d6ae7b5ea57946eb9f0479a83da96c1622057551059ffd645df8f628410a00141046e2298d86527d08589cf81eefb0857f5dda1167b49d99cf03f3fb2b01098e1e3cedcbb6da3c7dbdc893f15bdef80d51f9b2e3099949e7d7c9bbb2ec1c19aef4effffffff03781e000000000000895121021fab2c6657cd39baaf6fe10d9cb6731a6f221f57c5d65e6c34f69e62ed6aa9d92103fc9831f32e44cd7f8e88af4815d0be5aed5af278f3cc055031ceb16075c7709541046e2298d86527d08589cf81eefb0857f5dda1167b49d99cf03f3fb2b01098e1e3cedcbb6da3c7dbdc893f15bdef80d51f9b2e3099949e7d7c9bbb2ec1c19aef4e53ae781e0000000000008951210306ab2c6657cd39baaf546fe1af06444c763947788b97152d72dfd523a025fd552102b3b65b804142b90bfefb95673ab7cc349c28860addaf6a3d1eafc21310b3038541046e2298d86527d08589cf81eefb0857f5dda1167b49d99cf03f3fb2b01098e1e3cedcbb6da3c7dbdc893f15bdef80d51f9b2e3099949e7d7c9bbb2ec1c19aef4e53ae5bd14200000000001976a914a925bca955a11b6c07c2767acfb3f1dabce7ae5688ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        assert!(is_p2ms_counterparty(&tx));
+
+        // mainnet 229028368caadfbab2654f888e919062f117e24da5b3a1974ea9796162191a56
+        // OP_RETURN CounterParty tx
+        let raw_tx = hex::decode("01000000011378419519eebd4034e6eae696e98eee4f247f2103394740844a1cc5462fa465010000006b483045022100f592b2df2e8b9dcf6bc77bd0e8cc1064b74c6119cfb3482f96d03d1442d60f82022040372b55fd7aba6d7474ddce7e6d6a7b9219018e925e31379d06f4216104e51e0121021f6dc395418fed2bce5eb47485b2945e3681ba0a690c57779b09f4b15cb66afbffffffff020000000000000000386a36a61966fd345606c378b4ccd3596ab28200b3cb90398c0babbd1ef635a6dfd106e89794feae9a58d7700e6d3b41782e2181118a94eb9117390000000000001976a914bcb7dadb45b78b33653d38789ac14d54dff6de1388ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        assert!(!is_p2ms_counterparty(&tx));
     }
 }
