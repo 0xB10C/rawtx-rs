@@ -58,8 +58,8 @@ impl TxInfo {
             txid: tx.txid(),
             version: tx.version,
             payments,
-            vsize: (tx.get_weight() as f64 / 4f64).ceil() as u64,
-            weight: tx.get_weight() as u64,
+            vsize: (tx.weight() as f64 / 4f64).ceil() as u64,
+            weight: tx.weight() as u64,
             is_coinbase: tx.is_coin_base(),
             is_bip69_compliant: is_bip69_compliant(&tx.input, &tx.output),
             locktime: LocktimeInfo::new(tx),
@@ -71,7 +71,7 @@ impl TxInfo {
     /// Returns true if the transaction signals explicit RBF replicability by
     /// having all sequences of the inputs set to a value lower than 0xFFFF_FFFE.
     pub fn is_signaling_explicit_rbf_replicability(&self) -> bool {
-        self.input_infos.iter().all(|i| i.sequence < 0xFFFF_FFFE)
+        self.input_infos.iter().all(|i| i.sequence.is_rbf())
     }
 
     /// Returns true if at least one input spends either nested or native SegWit.

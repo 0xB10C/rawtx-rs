@@ -225,14 +225,14 @@ impl SignatureInfo {
                 // P2SH wrapped P2WPKH inputs contain the signature as the
                 // first element of the witness.
                 signature_infos.push(
-                    SignatureInfo::from_u8_slice_ecdsa(&input.witness[0], strict_der).unwrap(),
+                    SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0], strict_der).unwrap(),
                 );
             }
             InputType::P2wpkh => {
                 // P2WPKH inputs contain the signature as the first element of
                 // the witness.
                 signature_infos.push(
-                    SignatureInfo::from_u8_slice_ecdsa(&input.witness[0], strict_der).unwrap(),
+                    SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0], strict_der).unwrap(),
                 )
             }
             InputType::P2sh => {
@@ -252,7 +252,7 @@ impl SignatureInfo {
                 // P2SH wrapped P2WSH inputs can contain zero or multiple signatures in
                 // the witness. It's very uncommon that signatures are placed
                 // in the witness (redeem) script.
-                for bytes in input.witness[..input.witness.len() - 1].iter() {
+                for bytes in input.witness.to_vec()[..input.witness.len() - 1].iter() {
                     if let Some(signature_info) =
                         SignatureInfo::from_u8_slice_ecdsa(bytes, strict_der)
                     {
@@ -264,7 +264,7 @@ impl SignatureInfo {
                 // P2WSH inputs can contain zero or multiple signatures in
                 // the witness. It's very uncommon that signatures are placed
                 // in the witness (redeem) script.
-                for bytes in input.witness[..input.witness.len() - 1].iter() {
+                for bytes in input.witness.to_vec()[..input.witness.len() - 1].iter() {
                     if let Some(signature_info) =
                         SignatureInfo::from_u8_slice_ecdsa(bytes, strict_der)
                     {
@@ -276,13 +276,13 @@ impl SignatureInfo {
                 // P2TR key-path spends contain exactly one Schnorr signature in the
                 // witness.
                 signature_infos
-                    .push(SignatureInfo::from_u8_slice_schnorr(&input.witness[0]).unwrap())
+                    .push(SignatureInfo::from_u8_slice_schnorr(&input.witness.to_vec()[0]).unwrap())
             }
             InputType::P2trsp => {
                 // P2TR script-path spends contain zero or multiple signatures in the witness.
                 // There can't be any signatures in the annex, control block or script part.
                 // https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki#script-validation-rules
-                for bytes in input.witness[..input.witness.len() - 2].iter() {
+                for bytes in input.witness.to_vec()[..input.witness.len() - 2].iter() {
                     if let Some(signature_info) = SignatureInfo::from_u8_slice_schnorr(bytes) {
                         signature_infos.push(signature_info);
                     }
@@ -328,7 +328,7 @@ impl Multisig for bitcoin::Script {
         }
 
         if let Some(last_byte) = script_bytes.last() {
-            if *(last_byte) != opcodes::OP_CHECKMULTISIG.into_u8() {
+            if *(last_byte) != opcodes::OP_CHECKMULTISIG.to_u8() {
                 return Ok(None);
             }
         }
@@ -344,10 +344,10 @@ impl Multisig for bitcoin::Script {
         let m: u8; // number of possible public keys
 
         if let script::Instruction::Op(op) = instructions[0] {
-            if op.into_u8() >= opcodes::OP_PUSHNUM_1.into_u8()
-                && op.into_u8() <= opcodes::OP_PUSHNUM_16.into_u8()
+            if op.to_u8() >= opcodes::OP_PUSHNUM_1.to_u8()
+                && op.to_u8() <= opcodes::OP_PUSHNUM_16.to_u8()
             {
-                n = (op.into_u8() - opcodes::OP_PUSHNUM_1.into_u8()) + 1;
+                n = (op.to_u8() - opcodes::OP_PUSHNUM_1.to_u8()) + 1;
             } else {
                 return Ok(None);
             }
@@ -356,10 +356,10 @@ impl Multisig for bitcoin::Script {
         }
 
         if let script::Instruction::Op(op) = instructions[instructions.len() - 2] {
-            if op.into_u8() >= opcodes::OP_PUSHNUM_1.into_u8()
-                && op.into_u8() <= opcodes::OP_PUSHNUM_16.into_u8()
+            if op.to_u8() >= opcodes::OP_PUSHNUM_1.to_u8()
+                && op.to_u8() <= opcodes::OP_PUSHNUM_16.to_u8()
             {
-                m = (op.into_u8() - opcodes::OP_PUSHNUM_1.into_u8()) + 1;
+                m = (op.to_u8() - opcodes::OP_PUSHNUM_1.to_u8()) + 1;
             } else {
                 return Ok(None);
             }
