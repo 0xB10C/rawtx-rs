@@ -2,7 +2,7 @@
 
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
-use bitcoin::TxIn;
+use bitcoin::{TxIn, Sequence};
 use std::fmt;
 
 use crate::script::{Multisig, PublicKey, Signature, SignatureInfo};
@@ -14,7 +14,7 @@ pub const TAPROOT_LEAF_MASK: u8 = 0xfe;
 #[derive(Debug)]
 pub struct InputInfo {
     pub in_type: InputType,
-    pub sequence: u32,
+    pub sequence: Sequence,
     pub multisig_info: Option<MultisigInputInfo>,
     pub signature_info: Vec<SignatureInfo>,
     // TODO: PubKeyStats vec
@@ -469,11 +469,11 @@ impl InputTypeDetection for TxIn {
         }
 
         let script_sig = self.script_sig.as_bytes();
-        if script_sig[0] == opcodes::OP_PUSHBYTES_22.into_u8()
-            && script_sig[1] == opcodes::OP_PUSHBYTES_0.into_u8()
-            && script_sig[2] == opcodes::OP_PUSHBYTES_20.into_u8()
-            && self.witness[0].is_ecdsa_signature(/* strict DER */ true)
-            && self.witness[1].is_pubkey()
+        if script_sig[0] == opcodes::OP_PUSHBYTES_22.to_u8()
+            && script_sig[1] == opcodes::OP_PUSHBYTES_0.to_u8()
+            && script_sig[2] == opcodes::OP_PUSHBYTES_20.to_u8()
+            && self.witness.to_vec()[0].is_ecdsa_signature(/* strict DER */ true)
+            && self.witness.to_vec()[1].is_pubkey()
         {
             return true;
         }
@@ -496,9 +496,9 @@ impl InputTypeDetection for TxIn {
         }
 
         let script_sig = self.script_sig.as_bytes();
-        if script_sig[0] == opcodes::OP_PUSHBYTES_34.into_u8()
-            && script_sig[1] == opcodes::OP_PUSHBYTES_0.into_u8()
-            && script_sig[2] == opcodes::OP_PUSHBYTES_32.into_u8()
+        if script_sig[0] == opcodes::OP_PUSHBYTES_34.to_u8()
+            && script_sig[1] == opcodes::OP_PUSHBYTES_0.to_u8()
+            && script_sig[2] == opcodes::OP_PUSHBYTES_32.to_u8()
         {
             return true;
         }
@@ -516,7 +516,7 @@ impl InputTypeDetection for TxIn {
             return false;
         }
 
-        if self.witness[0].is_ecdsa_signature(/* strict DER */ true) && self.witness[1].is_pubkey()
+        if self.witness.to_vec()[0].is_ecdsa_signature(/* strict DER */ true) && self.witness.to_vec()[1].is_pubkey()
         {
             return true;
         }
@@ -554,11 +554,11 @@ impl InputTypeDetection for TxIn {
         }
         if self.witness.len() == 1 {
             // without annex
-            return self.witness[0].is_schnorr_signature();
+            return self.witness.to_vec()[0].is_schnorr_signature();
         } else if self.witness.len() == 2 {
             // with annex
-            if !self.witness[1].is_empty() && self.witness[1][0] == TAPROOT_ANNEX_INDICATOR {
-                return self.witness[0].is_schnorr_signature();
+            if !self.witness.to_vec()[1].is_empty() && self.witness.to_vec()[1][0] == TAPROOT_ANNEX_INDICATOR {
+                return self.witness.to_vec()[0].is_schnorr_signature();
             }
         }
         false
@@ -577,16 +577,17 @@ impl InputTypeDetection for TxIn {
 
         let last_witness_element_index = self.witness.len() - 1;
         let mut control_block_index = last_witness_element_index;
+        let witness_vec = self.witness.to_vec();
 
         // check for annex
-        if !self.witness[last_witness_element_index].is_empty()
-            && self.witness[last_witness_element_index][0] == TAPROOT_ANNEX_INDICATOR
+        if !witness_vec[last_witness_element_index].is_empty()
+            && witness_vec[last_witness_element_index][0] == TAPROOT_ANNEX_INDICATOR
         {
             control_block_index -= 1;
         }
 
         // check for control block
-        let control_block = &self.witness[control_block_index];
+        let control_block = &witness_vec[control_block_index];
         if control_block.len() < 1 + 32 || (control_block.len() - 1) % 32 != 0 {
             return false;
         }
