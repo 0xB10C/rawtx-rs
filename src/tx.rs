@@ -4,7 +4,7 @@ use crate::{input, output, timelock};
 use bitcoin::blockdata::script as bitcoin_script;
 use bitcoin::hash_types::Txid;
 use bitcoin::{Amount, Transaction, TxIn, TxOut};
-use input::InputInfo;
+use input::{InputInfo, ScriptHashInput};
 use output::{OutputInfo, OutputTypeDetection};
 use std::collections::HashMap;
 use timelock::LocktimeInfo;
@@ -311,6 +311,37 @@ pub fn is_p2ms_counterparty(tx: &Transaction) -> bool {
     false
 }
 
+#[cfg(feature = "counterparty")]
+/// Returns true if the transaction is a P2SH CounterParty transaction.
+pub fn is_p2sh_counterparty(tx: &Transaction) -> bool {
+    if tx.is_coin_base() {
+        return false;
+    }
+
+    // find P2SH input
+    for input in tx.input.iter() {
+        let redeem_script = match input.redeem_script() {
+            Ok(script) => match script {
+                Some(script) => script,
+                None => continue,
+            },
+            Err(_) => continue,
+        };
+
+        if let Ok(instructions) = instructions_as_vec(&redeem_script) {
+            if instructions.len() < 8 {
+                continue;
+            }
+            let payload = match instructions[0] {
+                Instruction::PushBytes(x) => x,
+                Instruction::Op(_) => continue,
+            };
+            return payload.starts_with(&[0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59]);
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::TxInfo;
@@ -320,6 +351,8 @@ mod tests {
     use crate::tx::is_opreturn_counterparty;
     #[cfg(feature = "counterparty")]
     use crate::tx::is_p2ms_counterparty;
+    #[cfg(feature = "counterparty")]
+    use crate::tx::is_p2sh_counterparty;
 
     #[test]
     fn bip69_compliance_1in_1out() {
@@ -372,5 +405,14 @@ mod tests {
         let raw_tx = hex::decode("01000000011378419519eebd4034e6eae696e98eee4f247f2103394740844a1cc5462fa465010000006b483045022100f592b2df2e8b9dcf6bc77bd0e8cc1064b74c6119cfb3482f96d03d1442d60f82022040372b55fd7aba6d7474ddce7e6d6a7b9219018e925e31379d06f4216104e51e0121021f6dc395418fed2bce5eb47485b2945e3681ba0a690c57779b09f4b15cb66afbffffffff020000000000000000386a36a61966fd345606c378b4ccd3596ab28200b3cb90398c0babbd1ef635a6dfd106e89794feae9a58d7700e6d3b41782e2181118a94eb9117390000000000001976a914bcb7dadb45b78b33653d38789ac14d54dff6de1388ac00000000").unwrap();
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         assert!(!is_p2ms_counterparty(&tx));
+    }
+
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_p2sh_counterparty_tx() {
+        // testnet 66ca3ba2df81d9c1da8ef4c253fab2ab5eda1db699ab028050c4d261d3716181
+        let raw_tx = hex::decode("010000000187e88fa930f1843d690db12fdb98b12efc9c52cc27b160aa4d128d82d4e8824500000000fd6201483045022100985cf3628b082c3af81509c048b13bf747251e869aee22133fc7a73dcfdfcc6a0220074fa0d9d1e0151e6f5cf84bccaf83f6f42c51aabec65c123bf327bdc13214a3014d16014ceb434e5452505254590300046f4a2fdff4db96b99f33972f11b9b32b545a824d086f5e1872b887654a3c44e5a3bd811e0ed8e911f58e6f78a50bfaf0e6a8dab23b0c802e7200d5a0d905c96fd8a4bff843c2ecd12b82b12b77e7151cd7928ef940000000584bf050f80000000000000007028000000000000000184746573744000000000000000619d989e5d195cf00000000000000018773656e64696e678000000000000000f0000000003253aac4c2a32b9ba1038bab4ba329030903637b7339039ba3934b7338000000000dc617b106b2cae6800000000533a84c4124ba60000000014f64d7104d2e60752102b1a624aadeb689e79e53c66cb282cbaaf9b381be4436ddcf48f99b5e403f2679ad0075740087ffffffff0100000000000000000e6a0cb18961d65a9207474701a54e00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        assert!(is_p2sh_counterparty(&tx));
     }
 }
