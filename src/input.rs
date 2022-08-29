@@ -139,8 +139,8 @@ pub trait ScriptHashInput {
 }
 
 impl ScriptHashInput for TxIn {
-    // returns the redeem script of the input. The caller must make sure the
-    // input is script hash based, otherwise None is returned.
+    /// Returns the redeem script of the input. The caller must make sure the
+    /// input is script hash based, otherwise None is returned.
     fn redeem_script(&self) -> Result<Option<bitcoin::Script>, script::Error> {
         if !self.is_scripthash_input()? {
             return Ok(None);
