@@ -152,8 +152,8 @@ impl OutputTypeDetection for TxOut {
     /// `script_pubkey: [ OP_PUSHNUM_1  <32-byte pubkey> ]`
     fn is_p2tr(&self) -> bool {
         if self.script_pubkey.len() == 34
-            && self.script_pubkey[0] == opcodes::OP_PUSHNUM_1.into_u8()
-            && self.script_pubkey[1] == opcodes::OP_PUSHBYTES_32.into_u8()
+            && self.script_pubkey[0] == opcodes::OP_PUSHNUM_1.to_u8()
+            && self.script_pubkey[1] == opcodes::OP_PUSHBYTES_32.to_u8()
         {
             return true;
         }

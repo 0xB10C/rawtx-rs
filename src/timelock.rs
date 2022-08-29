@@ -1,10 +1,10 @@
 //! Information about Bitcoin Time-Locks.
 
-use bitcoin::Transaction;
+use bitcoin::{Transaction, PackedLockTime};
 
 #[derive(Debug)]
 pub struct LocktimeInfo {
-    pub locktime: u32,
+    pub locktime: PackedLockTime,
     is_enforced: bool,
 }
 
@@ -12,7 +12,7 @@ impl LocktimeInfo {
     pub fn new(tx: &Transaction) -> LocktimeInfo {
         LocktimeInfo {
             locktime: tx.lock_time,
-            is_enforced: tx.input.iter().any(|i| i.sequence < 0xFFFF_FFFF) && tx.lock_time > 0,
+            is_enforced: tx.input.iter().any(|i| i.sequence.enables_absolute_lock_time()) && tx.lock_time > PackedLockTime::ZERO,
         }
     }
 
@@ -26,12 +26,12 @@ impl LocktimeInfo {
     /// Is true when the locktime represents a block height. The locktime value
     /// must larger than zero and smaller than 500_000_000.
     pub fn is_height(&self) -> bool {
-        self.locktime > 0 && self.locktime < 500_000_000
+        self.locktime > PackedLockTime::ZERO && self.locktime.to_u32() < 500_000_000
     }
 
     /// Is true when the locktime represents a timestamp. The locktime value
     /// must be larger than or equal to 500_000_000.
     pub fn is_timestamp(&self) -> bool {
-        self.locktime > 500_000_000
+        self.locktime.to_u32() > 500_000_000
     }
 }
