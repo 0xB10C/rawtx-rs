@@ -329,6 +329,9 @@ pub fn is_p2sh_counterparty(tx: &Transaction) -> bool {
         };
 
         if let Ok(instructions) = instructions_as_vec(&redeem_script) {
+            if instructions.len() < 8 {
+                continue;
+            }
             let payload = match instructions[0] {
                 Instruction::PushBytes(x) => x,
                 Instruction::Op(_) => continue,
