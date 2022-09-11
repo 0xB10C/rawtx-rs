@@ -342,17 +342,109 @@ pub fn is_p2sh_counterparty(tx: &Transaction) -> bool {
     false
 }
 
+#[cfg(feature = "counterparty")]
+/// Returns true if the transaction is a P2PKH CounterParty transaction.
+pub fn is_p2pkh_counterparty(tx: &Transaction) -> bool {
+    if tx.is_coin_base() {
+        return false;
+    }
+
+    // find P2PKH output
+    for output in tx.output.iter() {
+        if output.script_pubkey.is_p2pkh() {
+            if let Ok(instructions) = instructions_as_vec(&output.script_pubkey) {
+                // expected: OP_DUP OP_HASH160 OP_PUSHBYTES_20 <pubkeyhash> OP_EQUALVERIFY OP_CHECKSIG
+                if instructions.len() != 5 {
+                    return false;
+                }
+
+                let pubkeyhash = match instructions[2] {
+                    Instruction::PushBytes(x) => x,
+                    Instruction::Op(_) => return false,
+                };
+
+                let first_input = match tx.input.first() {
+                    Some(input) => input,
+                    None => return false,
+                };
+
+                // CounterParty uses the human readable hex (block-explorer) representation
+                // of the txid for encryption
+                let mut first_outpoint_txid = first_input.previous_output.txid.to_vec();
+                first_outpoint_txid.reverse();
+                let key = Key::<U32>::from_slice(&first_outpoint_txid);
+
+                let mut payload: Vec<u8> = pubkeyhash.into();
+
+                // decrypt the payload with the txid as key
+                let mut rc4 = Rc4::new(key);
+                rc4.apply_keystream(&mut payload);
+
+                if payload[1..].starts_with(&[0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59]) {
+                    return true;
+                }
+            };
+        }
+    }
+    false
+}
+
+#[cfg(feature = "counterparty")]
+/// Returns true if the transaction is a P2WPKH CounterParty transaction.
+pub fn is_p2wpkh_counterparty(tx: &Transaction) -> bool {
+    if tx.is_coin_base() {
+        return false;
+    }
+
+    // find P2WPKH output
+    for output in tx.output.iter() {
+        if output.script_pubkey.is_v0_p2wpkh() {
+            if let Ok(instructions) = instructions_as_vec(&output.script_pubkey) {
+                // expected: OP_0 OP_PUSHBYTES_20 <pubkeyhash>
+                if instructions.len() != 2 {
+                    return false;
+                }
+
+                let pubkeyhash = match instructions[1] {
+                    Instruction::PushBytes(x) => x,
+                    Instruction::Op(_) => return false,
+                };
+
+                let first_input = match tx.input.first() {
+                    Some(input) => input,
+                    None => return false,
+                };
+
+                // CounterParty uses the human readable hex (block-explorer) representation
+                // of the txid for encryption
+                let mut first_outpoint_txid = first_input.previous_output.txid.to_vec();
+                first_outpoint_txid.reverse();
+                let key = Key::<U32>::from_slice(&first_outpoint_txid);
+
+                let mut payload: Vec<u8> = pubkeyhash.into();
+
+                // decrypt the payload with the txid as key
+                let mut rc4 = Rc4::new(key);
+                rc4.apply_keystream(&mut payload);
+
+                // expected: PAYLOAD_LENGTH + PAYLOAD
+                // drop PAYLOAD_LENGTH
+                if payload[1..].starts_with(&[0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59]) {
+                    return true;
+                }
+            };
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::TxInfo;
     use bitcoin::Transaction;
 
     #[cfg(feature = "counterparty")]
-    use crate::tx::is_opreturn_counterparty;
-    #[cfg(feature = "counterparty")]
-    use crate::tx::is_p2ms_counterparty;
-    #[cfg(feature = "counterparty")]
-    use crate::tx::is_p2sh_counterparty;
+    use crate::tx::{is_opreturn_counterparty, is_p2ms_counterparty, is_p2sh_counterparty, is_p2pkh_counterparty, is_p2wpkh_counterparty};
 
     #[test]
     fn bip69_compliance_1in_1out() {
@@ -415,4 +507,24 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         assert!(is_p2sh_counterparty(&tx));
     }
+
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_p2pkh_counterparty_tx() {
+        // modified testvector from https://github.com/CounterpartyXCP/counterparty-lib/blob/d7d739caed4a54f990624021643095b75f473ed9/counterpartylib/test/fixtures/vectors.py#L415
+        // replaced TESTXXXX with CNTRPRTY
+        let raw_tx = hex::decode("0100000001ebe3111881a8733ace02271dcf606b7450c41a48c1cb21fd73f4ba787b353ce4000000001976a9148d6ae8a3b381663118b4e1eff4cfc7d0954dd6ec88acffffffff0636150000000000001976a9144838d8b3588c4c7ba7c1d06f866e9b3739c6303788ac36150000000000001976a9147db215a673f902adc73588683dc4c43a7146c46788ac36150000000000001976a9147da51ea175f108a1c6358868173e34e8ca75a06788ac36150000000000001976a9147da51ea175f108a1c637729895c4c468ca75a06788ac36150000000000001976a9147fa51ea175f108a1c63588682ed4c468ca7fa06788ace24ff505000000001976a9148d6ae8a3b381663118b4e1eff4cfc7d0954dd6ec88ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        assert!(is_p2pkh_counterparty(&tx));
+    }
+
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_p2wpkh_counterparty_tx() {
+        // mainnet 9e6b0473a0bf8f401d0d557147e3a4a950cf7bb8be4ee8cd3c4ea7809c72650a
+        let raw_tx = hex::decode("0100000001ebe3111881a8733ace02271dcf606b7450c41a48c1cb21fd73f4ba787b353ce4000000001976a9148d6ae8a3b381663118b4e1eff4cfc7d0954dd6ec88acffffffff0636150000000000001976a9144838d8b3588c4c7ba7c1d06f866e9b3739c6303788ac36150000000000001976a9147db215a673f902adc73588683dc4c43a7146c46788ac36150000000000001976a9147da51ea175f108a1c6358868173e34e8ca75a06788ac36150000000000001976a9147da51ea175f108a1c637729895c4c468ca75a06788ac36150000000000001976a9147fa51ea175f108a1c63588682ed4c468ca7fa06788ace24ff505000000001976a9148d6ae8a3b381663118b4e1eff4cfc7d0954dd6ec88ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        assert!(is_p2wpkh_counterparty(&tx));
+    }
+
 }
