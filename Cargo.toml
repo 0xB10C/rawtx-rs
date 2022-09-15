@@ -21,4 +21,4 @@ rc4 = { version = "0.1.0", optional = true }
 [features]
 default = []
 # used to detect counterparty transactions
-counterparty = [ "dep:rc4" ]
+counterparty = [ "rc4" ]
