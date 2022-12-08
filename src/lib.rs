@@ -52,3 +52,5 @@ pub mod output;
 pub mod script;
 pub mod timelock;
 pub mod tx;
+
+pub extern crate bitcoin;
