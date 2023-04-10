@@ -4,6 +4,10 @@ use crate::input::{InputType, InputTypeDetection};
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
 
+// "Maximum number of public keys per multisig"
+// from Bitcoin Core
+const MAX_PUBKEYS_PER_MULTISIG: usize = 20;
+
 // Helper function collecting the Instructions iterator into a
 // `Vec<script::Instruction>` for easier handling.
 pub fn instructions_as_vec(
@@ -348,6 +352,55 @@ impl SignatureInfo {
     }
 }
 
+pub trait ScriptSigOps {
+    fn sigops(&self, p2ms: bool) -> Result<usize, script::Error>;
+}
+
+impl ScriptSigOps for bitcoin::ScriptBuf {
+    // Counts sigops in scripts. These sigops might need to be multiplied with a
+    // factor based on context.
+    fn sigops(&self, p2ms: bool) -> Result<usize, script::Error> {
+        self.as_script().sigops(p2ms)
+    }
+}
+
+impl ScriptSigOps for bitcoin::Script {
+    // Counts sigops in redeem and witness scripts. These sigops might need to
+    // be multiplied with a factor based on wrapping output type (e.g. 4 for
+    // P2SH).
+    fn sigops(&self, p2ms: bool) -> Result<usize, script::Error> {
+        let mut sigops: usize = 0;
+
+        let mut prev_opcode = opcodes::OP_INVALIDOPCODE;
+        for instruction in self.instructions() {
+            match instruction? {
+                bitcoin::blockdata::script::Instruction::Op(opcode) => {
+                    if opcode == opcodes::OP_CHECKSIG || opcode == opcodes::OP_CHECKSIGVERIFY {
+                        // each OP_CHECKSIG* counts as one sigop
+                        sigops += 1;
+                    } else if opcode == opcodes::OP_CHECKMULTISIG
+                        || opcode == opcodes::OP_CHECKMULTISIGVERIFY
+                    {
+                        if !p2ms
+                            && prev_opcode.to_u8() >= opcodes::OP_PUSHNUM_1.to_u8()
+                            && prev_opcode.to_u8() <= opcodes::OP_PUSHNUM_16.to_u8()
+                        {
+                            sigops +=
+                                (prev_opcode.to_u8() - opcodes::OP_PUSHNUM_1.to_u8() + 1) as usize;
+                        } else {
+                            sigops += MAX_PUBKEYS_PER_MULTISIG;
+                        }
+                    }
+                    prev_opcode = opcode;
+                }
+                _ => (),
+            }
+        }
+
+        return Ok(sigops);
+    }
+}
+
 pub trait Multisig {
     fn is_opcheckmultisig(&self) -> bool;
     fn get_opcheckmultisig_n_m(&self) -> Result<Option<(u8, u8)>, script::Error>;
@@ -445,7 +498,9 @@ impl Multisig for bitcoin::Script {
 #[cfg(test)]
 mod tests {
     use super::Multisig;
-    use bitcoin::ScriptBuf;
+    use super::ScriptSigOps;
+    use bitcoin::blockdata::opcodes::all as opcodes;
+    use bitcoin::{Script, ScriptBuf};
 
     #[test]
     fn multisig_opcheckmultisig_2of2() {
@@ -505,5 +560,41 @@ mod tests {
         assert!(redeem_script_non_multisig
             .get_opcheckmultisig_n_m()
             .is_err())
+    }
+
+    #[test]
+    fn sigops_empty_script() {
+        let empty_script = ScriptBuf::new();
+        assert_eq!(empty_script.sigops(false).unwrap(), 0);
+        assert_eq!(empty_script.sigops(true).unwrap(), 0);
+    }
+
+    #[test]
+    fn sigops_multisig_script() {
+        let multisig_script_builder = Script::builder()
+            .push_opcode(opcodes::OP_PUSHNUM_1)
+            .push_slice([0xb1, 0x0c, 0xab, 0xcd])
+            .push_slice([0xb1, 0x0c, 0xcd, 0xef])
+            .push_opcode(opcodes::OP_PUSHNUM_2)
+            .push_opcode(opcodes::OP_CHECKMULTISIG);
+        let multisig_script_1 = multisig_script_builder.as_script();
+        assert_eq!(multisig_script_1.sigops(false).unwrap(), 2);
+        assert_eq!(multisig_script_1.sigops(true).unwrap(), 20);
+
+        // adding an extra OP_IF OP_CHECKSIG OP_ENDIF -- this adds a sigop
+
+        let multisig_script_builder = Script::builder()
+            .push_opcode(opcodes::OP_PUSHNUM_1)
+            .push_slice([0xb1, 0x0c, 0xab, 0xcd])
+            .push_slice([0xb1, 0x0c, 0xcd, 0xef])
+            .push_opcode(opcodes::OP_PUSHNUM_2)
+            .push_opcode(opcodes::OP_CHECKMULTISIG)
+            .push_opcode(opcodes::OP_IF)
+            .push_opcode(opcodes::OP_CHECKSIG)
+            .push_opcode(opcodes::OP_ENDIF);
+        let multisig_script_2 = multisig_script_builder.as_script();
+        println!("multisig_script_2: {}", multisig_script_2);
+        assert_eq!(multisig_script_2.sigops(false).unwrap(), 3);
+        assert_eq!(multisig_script_2.sigops(true).unwrap(), 21);
     }
 }
