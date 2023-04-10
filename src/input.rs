@@ -2,7 +2,7 @@
 
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
-use bitcoin::{TxIn, Sequence};
+use bitcoin::{Sequence, TxIn};
 use std::fmt;
 
 use crate::script::{Multisig, PublicKey, Signature, SignatureInfo};
@@ -135,13 +135,13 @@ impl InputMultisigDetection for TxIn {
 }
 
 pub trait ScriptHashInput {
-    fn redeem_script(&self) -> Result<Option<bitcoin::Script>, script::Error>;
+    fn redeem_script(&self) -> Result<Option<bitcoin::ScriptBuf>, script::Error>;
 }
 
 impl ScriptHashInput for TxIn {
     /// Returns the redeem script of the input. The caller must make sure the
     /// input is script hash based, otherwise None is returned.
-    fn redeem_script(&self) -> Result<Option<bitcoin::Script>, script::Error> {
+    fn redeem_script(&self) -> Result<Option<bitcoin::ScriptBuf>, script::Error> {
         if !self.is_scripthash_input()? {
             return Ok(None);
         }
@@ -150,8 +150,10 @@ impl ScriptHashInput for TxIn {
             InputType::P2sh => {
                 // redeem script is the last element of the script sig
                 if let Some(instruction) = self.script_sig.instructions().last() {
-                    if let script::Instruction::PushBytes(bytes) = instruction? {
-                        return Ok(Some(bitcoin::Script::from(bytes.to_vec())));
+                    if let script::Instruction::PushBytes(push_bytes) = instruction? {
+                        return Ok(Some(bitcoin::ScriptBuf::from(
+                            push_bytes.as_bytes().to_vec(),
+                        )));
                     }
                 }
                 Ok(None)
@@ -159,14 +161,14 @@ impl ScriptHashInput for TxIn {
             InputType::P2shP2wsh => {
                 // redeem script is the last element of the witness
                 if let Some(bytes) = self.witness.last() {
-                    return Ok(Some(bitcoin::Script::from(bytes.to_vec())));
+                    return Ok(Some(bitcoin::ScriptBuf::from(bytes.to_vec())));
                 }
                 Ok(None)
             }
             InputType::P2wsh => {
                 // redeem script is the last element of the witness
                 if let Some(bytes) = self.witness.last() {
-                    return Ok(Some(bitcoin::Script::from(bytes.to_vec())));
+                    return Ok(Some(bitcoin::ScriptBuf::from(bytes.to_vec())));
                 }
                 Ok(None)
             }
@@ -516,7 +518,8 @@ impl InputTypeDetection for TxIn {
             return false;
         }
 
-        if self.witness.to_vec()[0].is_ecdsa_signature(/* strict DER */ true) && self.witness.to_vec()[1].is_pubkey()
+        if self.witness.to_vec()[0].is_ecdsa_signature(/* strict DER */ true)
+            && self.witness.to_vec()[1].is_pubkey()
         {
             return true;
         }
@@ -557,7 +560,9 @@ impl InputTypeDetection for TxIn {
             return self.witness.to_vec()[0].is_schnorr_signature();
         } else if self.witness.len() == 2 {
             // with annex
-            if !self.witness.to_vec()[1].is_empty() && self.witness.to_vec()[1][0] == TAPROOT_ANNEX_INDICATOR {
+            if !self.witness.to_vec()[1].is_empty()
+                && self.witness.to_vec()[1][0] == TAPROOT_ANNEX_INDICATOR
+            {
                 return self.witness.to_vec()[0].is_schnorr_signature();
             }
         }
@@ -630,7 +635,9 @@ impl InputTypeDetection for TxIn {
 
 #[cfg(test)]
 mod tests {
-    use super::{InputMultisigDetection, InputType, InputTypeDetection, MultisigInputInfo, InputInfo};
+    use super::{
+        InputInfo, InputMultisigDetection, InputType, InputTypeDetection, MultisigInputInfo,
+    };
     use bitcoin::Transaction;
 
     #[test]

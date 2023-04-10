@@ -1,13 +1,14 @@
 //! Information about Bitcoin transactions.
 
-use crate::{input, output, timelock};
+use crate::{input, output};
+use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::blockdata::script as bitcoin_script;
 use bitcoin::hash_types::Txid;
+use bitcoin::hashes::Hash;
 use bitcoin::{Amount, Transaction, TxIn, TxOut};
 use input::{InputInfo, ScriptHashInput};
 use output::{OutputInfo, OutputTypeDetection};
 use std::collections::HashMap;
-use timelock::LocktimeInfo;
 
 #[cfg(feature = "counterparty")]
 use crate::script::{instructions_as_vec, Multisig};
@@ -24,8 +25,8 @@ pub struct TxInfo {
     pub payments: u32,
     pub vsize: u64,
     pub weight: u64,
-    /// Information about the transactions time-lock.
-    pub locktime: LocktimeInfo,
+    /// Information about the transactions absolute time-lock.
+    pub locktime: LockTime,
     /// Information about the transaction inputs.
     pub input_infos: Vec<InputInfo>,
     /// Information about the transaction outputs.
@@ -58,11 +59,11 @@ impl TxInfo {
             txid: tx.txid(),
             version: tx.version,
             payments,
-            vsize: (tx.weight() as f64 / 4f64).ceil() as u64,
-            weight: tx.weight() as u64,
+            vsize: tx.vsize() as u64,
+            weight: tx.weight().to_wu() as u64,
             is_coinbase: tx.is_coin_base(),
             is_bip69_compliant: is_bip69_compliant(&tx.input, &tx.output),
-            locktime: LocktimeInfo::new(tx),
+            locktime: tx.lock_time,
             input_infos,
             output_infos,
         })
@@ -188,9 +189,9 @@ fn is_bip69_compliant(inputs: &[TxIn], outputs: &[TxOut]) -> bool {
     } else {
         let mut to_be_sorted_inputs = inputs.to_vec();
         to_be_sorted_inputs.sort_by(|a, b| {
-            let mut a_outpoint_txid_reversed = a.previous_output.txid.to_vec();
+            let mut a_outpoint_txid_reversed = a.previous_output.txid.to_byte_array();
             a_outpoint_txid_reversed.reverse();
-            let mut b_outpoint_txid_reversed = b.previous_output.txid.to_vec();
+            let mut b_outpoint_txid_reversed = b.previous_output.txid.to_byte_array();
             b_outpoint_txid_reversed.reverse();
 
             a_outpoint_txid_reversed
@@ -236,13 +237,13 @@ pub fn is_opreturn_counterparty(tx: &Transaction) -> bool {
 
                 // CounterParty uses the human readable hex (block-explorer) representation
                 // of the txid for encryption
-                let mut first_outpoint_txid = first_input.previous_output.txid.to_vec();
+                let mut first_outpoint_txid = first_input.previous_output.txid.to_byte_array();
                 first_outpoint_txid.reverse();
                 let key = Key::<U32>::from_slice(&first_outpoint_txid);
 
                 // expected: OP_RETURN PUSH_DATA <payload>
                 // drop the OP_RETURN and PUSH_DATA here
-                let mut payload = output.script_pubkey.clone()[2..].to_vec();
+                let mut payload = output.script_pubkey.clone().as_bytes()[2..].to_vec();
 
                 // decrypt the payload with the txid as key
                 let mut rc4 = Rc4::new(key);
@@ -285,13 +286,14 @@ pub fn is_p2ms_counterparty(tx: &Transaction) -> bool {
 
                         // CounterParty uses the human readable hex (block-explorer) representation
                         // of the txid for encryption
-                        let mut first_outpoint_txid = first_input.previous_output.txid.to_vec();
+                        let mut first_outpoint_txid =
+                            first_input.previous_output.txid.to_byte_array();
                         first_outpoint_txid.reverse();
                         let key = Key::<U32>::from_slice(&first_outpoint_txid);
 
                         // expected: PUBKEYMARKER (02 or 03) and payload
                         // drop the PUBKEYMARKER
-                        let mut payload: Vec<u8> = first_pubkey[1..].into();
+                        let mut payload: Vec<u8> = first_pubkey.as_bytes()[1..].to_vec();
 
                         // decrypt the payload with the txid as key
                         let mut rc4 = Rc4::new(key);
@@ -333,7 +335,7 @@ pub fn is_p2sh_counterparty(tx: &Transaction) -> bool {
                 continue;
             }
             let payload = match instructions[0] {
-                Instruction::PushBytes(x) => x,
+                Instruction::PushBytes(x) => x.as_bytes(),
                 Instruction::Op(_) => continue,
             };
             return payload.starts_with(&[0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59]);

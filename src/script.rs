@@ -24,9 +24,19 @@ pub trait PublicKey {
 impl PublicKey for script::Instruction<'_> {
     fn is_ecdsa_pubkey(&self) -> bool {
         match self {
-            script::Instruction::PushBytes(bytes) => bytes.to_vec().is_ecdsa_pubkey(),
+            script::Instruction::PushBytes(bytes) => bytes.as_bytes().is_ecdsa_pubkey(),
             script::Instruction::Op(_) => false,
         }
+    }
+}
+
+impl PublicKey for [u8] {
+    fn is_ecdsa_pubkey(&self) -> bool {
+        // Public keys should either be 33 bytes or 65 bytes long
+        if self.len() != 33 && self.len() != 65 {
+            return false;
+        }
+        bitcoin::PublicKey::from_slice(self).is_ok()
     }
 }
 
@@ -36,7 +46,7 @@ impl PublicKey for Vec<u8> {
         if self.len() != 33 && self.len() != 65 {
             return false;
         }
-        bitcoin::util::key::PublicKey::from_slice(self).is_ok()
+        bitcoin::PublicKey::from_slice(self).is_ok()
     }
 }
 
@@ -56,15 +66,48 @@ pub trait Signature {
 impl Signature for script::Instruction<'_> {
     fn is_ecdsa_signature(&self, strict_der: bool) -> bool {
         match self {
-            script::Instruction::PushBytes(bytes) => bytes.to_vec().is_ecdsa_signature(strict_der),
+            script::Instruction::PushBytes(bytes) => {
+                bytes.as_bytes().is_ecdsa_signature(strict_der)
+            }
             script::Instruction::Op(_) => false,
         }
     }
     fn is_schnorr_signature(&self) -> bool {
         match self {
-            script::Instruction::PushBytes(bytes) => bytes.to_vec().is_schnorr_signature(),
+            script::Instruction::PushBytes(bytes) => bytes.as_bytes().is_schnorr_signature(),
             script::Instruction::Op(_) => false,
         }
+    }
+}
+
+impl Signature for [u8] {
+    fn is_ecdsa_signature(&self, strict_der: bool) -> bool {
+        if self.len() < 9 || self.len() > 73 {
+            false
+        } else {
+            let sighash_stripped = &self[..self.len() - 1];
+            if strict_der {
+                secp256k1::Signature::from_der(sighash_stripped).is_ok()
+            } else {
+                secp256k1::Signature::from_der_lax(sighash_stripped).is_ok()
+            }
+        }
+    }
+
+    fn is_schnorr_signature(&self) -> bool {
+        if self.len() == 64 {
+            // As long as we see excatly 64 bytes here, we assume it's a Schnoor signature.
+            return true;
+        } else if self.len() == 65 {
+            let sighash = self.last().unwrap();
+            return *sighash == 0x01u8
+                || *sighash == 0x02u8
+                || *sighash == 0x03u8
+                || *sighash == 0x81u8
+                || *sighash == 0x82u8
+                || *sighash == 0x83u8;
+        }
+        false
     }
 }
 
@@ -125,7 +168,7 @@ impl SignatureInfo {
         if instruction.is_ecdsa_signature(strict_der) {
             match instruction {
                 script::Instruction::PushBytes(bytes) => {
-                    return SignatureInfo::from_u8_slice_ecdsa(bytes, strict_der);
+                    return SignatureInfo::from_u8_slice_ecdsa(bytes.as_bytes(), strict_der);
                 }
                 script::Instruction::Op(_) => return None,
             }
@@ -139,7 +182,7 @@ impl SignatureInfo {
         if instruction.is_schnorr_signature() {
             match instruction {
                 script::Instruction::PushBytes(bytes) => {
-                    return SignatureInfo::from_u8_slice_schnorr(bytes);
+                    return SignatureInfo::from_u8_slice_schnorr(bytes.as_bytes());
                 }
                 script::Instruction::Op(_) => return None,
             }
@@ -198,7 +241,11 @@ impl SignatureInfo {
                 // the first byte is a PUSH_BYTES_XX followed by the bytes of the
                 // signature.
                 signature_infos.push(
-                    SignatureInfo::from_u8_slice_ecdsa(&input.script_sig[1..], strict_der).unwrap(),
+                    SignatureInfo::from_u8_slice_ecdsa(
+                        &input.script_sig.as_script().as_bytes()[1..],
+                        strict_der,
+                    )
+                    .unwrap(),
                 );
             }
             InputType::P2ms | InputType::P2msLaxDer => {
@@ -225,14 +272,16 @@ impl SignatureInfo {
                 // P2SH wrapped P2WPKH inputs contain the signature as the
                 // first element of the witness.
                 signature_infos.push(
-                    SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0], strict_der).unwrap(),
+                    SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0], strict_der)
+                        .unwrap(),
                 );
             }
             InputType::P2wpkh => {
                 // P2WPKH inputs contain the signature as the first element of
                 // the witness.
                 signature_infos.push(
-                    SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0], strict_der).unwrap(),
+                    SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0], strict_der)
+                        .unwrap(),
                 )
             }
             InputType::P2sh => {
@@ -396,12 +445,12 @@ impl Multisig for bitcoin::Script {
 #[cfg(test)]
 mod tests {
     use super::Multisig;
-    use bitcoin::Script;
+    use bitcoin::ScriptBuf;
 
     #[test]
     fn multisig_opcheckmultisig_2of2() {
         // from mainnet f72d52eaae494da7c438a8456a9b20d2791fdf2b1c818825458f8f707d7b8011 input 0
-        let redeem_script_ms_2of2 = Script::from(hex::decode("522103a2ea7e0b94c48fd799bf123c1f19b50fb6d15da310db8223fd7a6afd8b03e6932102eba627e6ea5bb7e0f4c981596872d0a97d800fb836b5b3a585c3f2b99c77a0e552ae").unwrap());
+        let redeem_script_ms_2of2 = ScriptBuf::from_hex("522103a2ea7e0b94c48fd799bf123c1f19b50fb6d15da310db8223fd7a6afd8b03e6932102eba627e6ea5bb7e0f4c981596872d0a97d800fb836b5b3a585c3f2b99c77a0e552ae").unwrap();
         assert_eq!(
             redeem_script_ms_2of2.get_opcheckmultisig_n_m(),
             Ok(Some((2, 2)))
@@ -411,7 +460,7 @@ mod tests {
     #[test]
     fn multisig_opcheckmultisig_4of5() {
         // from mainnet 391f812dcce57d1b60669dfdc538d34fe25eec27134122d1fec8cd3208cb3ad4 input 0
-        let redeem_script_ms_2of2 = Script::from(hex::decode("542102916d4144e950066e729b6142e6b0e24edeed8203303113c71bdf0fc8e1daad1e210236a7c19695857bacd26921ba932a287bfdc622498296166cd6ff5488525abf782103db287a99a4d208dd912e366494b1828c0046fd76cb2277f4a3abf4b43d9d6f6921034597594080142f4492f5f39a01c2ee203e1d9efedfebbccf77d0d5c6f54b92202102003af4953da0b10f848ce81c9564ff7cbe289fc9beda4e70d66176c12ec622e255ae").unwrap());
+        let redeem_script_ms_2of2 = ScriptBuf::from_hex("542102916d4144e950066e729b6142e6b0e24edeed8203303113c71bdf0fc8e1daad1e210236a7c19695857bacd26921ba932a287bfdc622498296166cd6ff5488525abf782103db287a99a4d208dd912e366494b1828c0046fd76cb2277f4a3abf4b43d9d6f6921034597594080142f4492f5f39a01c2ee203e1d9efedfebbccf77d0d5c6f54b92202102003af4953da0b10f848ce81c9564ff7cbe289fc9beda4e70d66176c12ec622e255ae").unwrap();
         assert_eq!(
             redeem_script_ms_2of2.get_opcheckmultisig_n_m(),
             Ok(Some((4, 5)))
@@ -420,7 +469,7 @@ mod tests {
 
     #[test]
     fn multisig_opcheckmultisig_non_multiscript_sig() {
-        let redeem_script_non_multisig = Script::from(hex::decode("6382012088a820697ce4e1d91cdc96d53d1bc591367bd48855a076301972842aa5ffcb8fcb8b618876a9142c3a8a495c16839d5d975c1ca0ee504af825b52188ac6704c9191960b17576a9145a59f40f4ecb1f86efb13752b600ea3b8d4c633988ac68").unwrap());
+        let redeem_script_non_multisig = ScriptBuf::from_hex("6382012088a820697ce4e1d91cdc96d53d1bc591367bd48855a076301972842aa5ffcb8fcb8b618876a9142c3a8a495c16839d5d975c1ca0ee504af825b52188ac6704c9191960b17576a9145a59f40f4ecb1f86efb13752b600ea3b8d4c633988ac68").unwrap();
         assert_eq!(
             redeem_script_non_multisig.get_opcheckmultisig_n_m(),
             Ok(None)
@@ -430,7 +479,7 @@ mod tests {
     #[test]
     fn multisig_opcheckmultisig_broken_2of3() {
         // A 2-of-2 script modified to have n = 2 and m = 3, but only 2 PubKeys
-        let redeem_script_non_multisig = Script::from(hex::decode("522103a2ea7e0b94c48fd799bf123c1f19b50fb6d15da310db8223fd7a6afd8b03e6932102eba627e6ea5bb7e0f4c981596872d0a97d800fb836b5b3a585c3f2b99c77a0e553ae").unwrap());
+        let redeem_script_non_multisig = ScriptBuf::from_hex("522103a2ea7e0b94c48fd799bf123c1f19b50fb6d15da310db8223fd7a6afd8b03e6932102eba627e6ea5bb7e0f4c981596872d0a97d800fb836b5b3a585c3f2b99c77a0e553ae").unwrap();
         assert_eq!(
             redeem_script_non_multisig.get_opcheckmultisig_n_m(),
             Ok(None)
@@ -440,12 +489,10 @@ mod tests {
     #[test]
     fn multisig_opcheckmultisig_broken_2of1() {
         // A 2-of-1 script e.g. found twice in the testnet transaction 157c8495334e86b9422e656aa2c1a2fe977ed91fd27e2db71f6f64576f0456d9
-        let redeem_script_non_multisig = Script::from(
-            hex::decode(
-                "5221021f5e6d618cf1beb74c79f42b0aae796094b3112bbe003209a2c1f757f1215bfd51ae",
-            )
-            .unwrap(),
-        );
+        let redeem_script_non_multisig = ScriptBuf::from_hex(
+            "5221021f5e6d618cf1beb74c79f42b0aae796094b3112bbe003209a2c1f757f1215bfd51ae",
+        )
+        .unwrap();
         assert_eq!(
             redeem_script_non_multisig.get_opcheckmultisig_n_m(),
             Ok(None)
@@ -454,7 +501,7 @@ mod tests {
 
     #[test]
     fn multisig_opcheckmultisig_invalid_script() {
-        let redeem_script_non_multisig = Script::from(hex::decode("b10cabcdae").unwrap());
+        let redeem_script_non_multisig = ScriptBuf::from_hex("b10cabcdae").unwrap();
         assert!(redeem_script_non_multisig
             .get_opcheckmultisig_n_m()
             .is_err())

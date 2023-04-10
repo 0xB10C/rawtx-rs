@@ -151,9 +151,10 @@ impl OutputTypeDetection for TxOut {
     /// A P2TR output pushes the witness version 1 followed by a 32-byte schnorr-pubkey
     /// `script_pubkey: [ OP_PUSHNUM_1  <32-byte pubkey> ]`
     fn is_p2tr(&self) -> bool {
-        if self.script_pubkey.len() == 34
-            && self.script_pubkey[0] == opcodes::OP_PUSHNUM_1.to_u8()
-            && self.script_pubkey[1] == opcodes::OP_PUSHBYTES_32.to_u8()
+        let script_pubkey_bytes = self.script_pubkey.as_bytes();
+        if script_pubkey_bytes.len() == 34
+            && script_pubkey_bytes[0] == opcodes::OP_PUSHNUM_1.to_u8()
+            && script_pubkey_bytes[1] == opcodes::OP_PUSHBYTES_32.to_u8()
         {
             return true;
         }
@@ -166,13 +167,14 @@ impl OutputTypeDetection for TxOut {
     /// A witness commitment is atleast 38 bytes long and starts with `6a24aa21a9ed`. More details
     /// can be found in [BIP-141](https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki#commitment-structure).
     fn is_witness_commitment(&self) -> bool {
-        if self.script_pubkey.len() >= 38
-            && self.script_pubkey[0] == 0x6A
-            && self.script_pubkey[1] == 0x24
-            && self.script_pubkey[2] == 0xAA
-            && self.script_pubkey[3] == 0x21
-            && self.script_pubkey[4] == 0xA9
-            && self.script_pubkey[5] == 0xED
+        let script_pubkey_bytes = self.script_pubkey.as_bytes();
+        if script_pubkey_bytes.len() >= 38
+            && script_pubkey_bytes[0] == 0x6A
+            && script_pubkey_bytes[1] == 0x24
+            && script_pubkey_bytes[2] == 0xAA
+            && script_pubkey_bytes[3] == 0x21
+            && script_pubkey_bytes[4] == 0xA9
+            && script_pubkey_bytes[5] == 0xED
         {
             return true;
         }
@@ -183,13 +185,14 @@ impl OutputTypeDetection for TxOut {
     ///
     /// The data in OmniLayer transactions starts with the String 'omni' which is 6f 6d 6e 69 in hex.
     fn is_opreturn_omni(&self) -> bool {
-        if self.script_pubkey.len() > 6 && self.script_pubkey[0] == 0x6A &&
+        let script_pubkey_bytes = self.script_pubkey.as_bytes();
+        if script_pubkey_bytes.len() > 6 && script_pubkey_bytes[0] == 0x6A &&
                 // -- leaving this out as its not clear if all omni op_returns have the same length
-                // self.script_pubkey[1] == 0x14 && 
-                self.script_pubkey[2] == 0x6f &&
-                self.script_pubkey[3] == 0x6d &&
-                self.script_pubkey[4] == 0x6e &&
-                self.script_pubkey[5] == 0x69
+                // script_pubkey_bytes[1] == 0x14 && 
+                script_pubkey_bytes[2] == 0x6f &&
+                script_pubkey_bytes[3] == 0x6d &&
+                script_pubkey_bytes[4] == 0x6e &&
+                script_pubkey_bytes[5] == 0x69
         {
             return true;
         }
@@ -204,13 +207,14 @@ impl OutputTypeDetection for TxOut {
     /// which is 0x58 0x32 in hex followed a '[' (0x5b).
     /// https://forum.stacks.org/t/op-return-outputs/12000
     fn is_opreturn_stacks_blockcommit(&self) -> bool {
-        if self.script_pubkey.len() == 83
-            && self.script_pubkey[0] == 0x6A
-            && self.script_pubkey[1] == 0x4C
-            && self.script_pubkey[2] == 0x50
-            && self.script_pubkey[3] == 0x58
-            && self.script_pubkey[4] == 0x32
-            && self.script_pubkey[5] == 0x5b
+        let script_pubkey_bytes = self.script_pubkey.as_bytes();
+        if script_pubkey_bytes.len() == 83
+            && script_pubkey_bytes[0] == 0x6A
+            && script_pubkey_bytes[1] == 0x4C
+            && script_pubkey_bytes[2] == 0x50
+            && script_pubkey_bytes[3] == 0x58
+            && script_pubkey_bytes[4] == 0x32
+            && script_pubkey_bytes[5] == 0x5b
         {
             return true;
         }
@@ -234,7 +238,7 @@ impl OutputTypeDetection for TxOut {
             return false;
         }
 
-        if !self.script_pubkey[0] == 0x6A {
+        if !self.script_pubkey.as_bytes()[0] == 0x6A {
             return false;
         }
 
@@ -252,7 +256,7 @@ impl OutputTypeDetection for TxOut {
 
 #[cfg(test)]
 mod tests {
-    use super::{OutputType, OutputTypeDetection, OpReturnFlavor};
+    use super::{OpReturnFlavor, OutputType, OutputTypeDetection};
     use bitcoin::Transaction;
 
     #[test]
@@ -289,7 +293,10 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         let out1 = &tx.output[1];
         assert!(out1.is_witness_commitment());
-        assert_eq!(out1.get_type(), OutputType::OpReturn(OpReturnFlavor::WitnessCommitment));
+        assert_eq!(
+            out1.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::WitnessCommitment)
+        );
     }
 
     #[test]
@@ -309,6 +316,9 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         let out2 = &tx.output[0];
         assert!(out2.is_opreturn_stacks_blockcommit());
-        assert_eq!(out2.get_type(), OutputType::OpReturn(OpReturnFlavor::StacksBlockCommit));
+        assert_eq!(
+            out2.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::StacksBlockCommit)
+        );
     }
 }
