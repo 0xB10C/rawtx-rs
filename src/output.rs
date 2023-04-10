@@ -1,8 +1,10 @@
 //! Information about Bitcoin transaction outputs.
 
-use crate::script::Multisig;
-use bitcoin::{blockdata::opcodes::all as opcodes, Amount, TxOut};
 use std::fmt;
+
+use bitcoin::{blockdata::opcodes::all as opcodes, script, Amount, TxOut};
+
+use crate::script::{Multisig, ScriptSigOps};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct OutputInfo {
@@ -251,6 +253,27 @@ impl OutputTypeDetection for TxOut {
         }
 
         false
+    }
+}
+
+pub trait OutputSigops {
+    fn sigops(&self) -> Result<usize, script::Error>;
+}
+
+impl OutputSigops for TxOut {
+    fn sigops(&self) -> Result<usize, script::Error> {
+        const SIGOPS_SCALE_FACTOR: usize = 4;
+
+        // in P2TR scripts, no sigops are counted
+        if self.is_p2tr() {
+            return Ok(0);
+        }
+
+        if self.is_p2ms() {
+            return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.sigops(true)?);
+        }
+
+        return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.sigops(false)?);
     }
 }
 
