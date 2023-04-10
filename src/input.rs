@@ -143,8 +143,8 @@ impl InputSigops for TxIn {
         const SIGOPS_SCALE_FACTOR: usize = 4;
         let mut sigops: usize = 0;
 
-        // in P2TR scripts, no sigops are counted
-        if self.is_p2trkp() || self.is_p2trsp() {
+        // in P2TR scripts and coinbase inputs, no sigops are counted
+        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase()  {
             return Ok(0);
         }
 
