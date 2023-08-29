@@ -115,6 +115,28 @@ impl InputInfo {
         }
     }
 
+    /// Returns true if the input spends a legacy output.
+    pub fn is_spending_legacy(&self) -> bool {
+        match self.in_type {
+            InputType::P2ms
+            | InputType::P2msLaxDer
+            | InputType::P2pk
+            | InputType::P2pkLaxDer
+            | InputType::P2pkh
+            | InputType::P2pkhLaxDer
+            | InputType::P2sh
+            | InputType::Unknown => true,
+            InputType::P2wpkh
+            | InputType::P2wsh
+            | InputType::P2trkp
+            | InputType::P2trsp
+            | InputType::P2shP2wpkh
+            | InputType::P2shP2wsh
+            | InputType::Coinbase
+            | InputType::CoinbaseWitness => false,
+        }
+    }
+
     /// Returns true if the input spends a Multisig input.
     pub fn is_spending_multisig(&self) -> bool {
         self.multisig_info.is_some()
