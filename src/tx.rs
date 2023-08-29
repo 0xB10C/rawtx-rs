@@ -100,9 +100,33 @@ impl TxInfo {
             .any(|i| i.is_spending_native_segwit())
     }
 
-    /// Returns true if all inputs spend either nested or native SegWit.
+    /// Returns true if all inputs spend SegWit outputs.
     pub fn is_only_spending_segwit(&self) -> bool {
         self.input_infos.iter().all(|i| i.is_spending_segwit())
+    }
+
+    /// Returns true if all inputs spend legacy outputs.
+    pub fn is_only_spending_legacy(&self) -> bool {
+        self.input_infos.iter().all(|i| i.is_spending_legacy())
+    }
+
+    /// Returns true if all inputs spend taproot outputs.
+    pub fn is_only_spending_taproot(&self) -> bool {
+        self.input_infos.iter().all(|i| i.is_spending_taproot())
+    }
+
+    /// Returns true if the inputs spend legacy and SegWit outputs.
+    pub fn is_spending_segwit_and_legacy(&self) -> bool {
+        let mut legacy = false;
+        let mut segwit = false;
+        for i in self.input_infos.iter() {
+            legacy = legacy | i.is_spending_legacy();
+            segwit = segwit | i.is_spending_segwit();
+            if legacy && segwit {
+                return true;
+            }
+        }
+        legacy && segwit
     }
 
     /// Returns true if all inputs spend nested SegWit.
