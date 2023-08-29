@@ -32,17 +32,50 @@ impl InputInfo {
         })
     }
 
-    /// Returns true if the input spends either a nested and native SegWit
+    /// Returns true if the input spends a SegWit output
     pub fn is_spending_segwit(&self) -> bool {
-        self.is_spending_nested_segwit() | self.is_spending_native_segwit()
+        match self.in_type {
+            InputType::P2shP2wpkh
+            | InputType::P2shP2wsh
+            | InputType::P2wpkh
+            | InputType::P2wsh
+            | InputType::P2trkp
+            | InputType::P2trsp => true,
+            InputType::P2ms
+            | InputType::P2msLaxDer
+            | InputType::P2pk
+            | InputType::P2pkLaxDer
+            | InputType::P2pkh
+            | InputType::P2pkhLaxDer
+            | InputType::P2sh
+            | InputType::Unknown
+            | InputType::Coinbase
+            | InputType::CoinbaseWitness => false,
+        }
     }
 
     /// Returns true if the input spends Taproot either with a key-path or script-path spend.
     pub fn is_spending_taproot(&self) -> bool {
-        self.in_type == InputType::P2trkp || self.in_type == InputType::P2trsp
+        match self.in_type {
+            InputType::P2trkp | InputType::P2trsp => true,
+            InputType::P2ms
+            | InputType::P2msLaxDer
+            | InputType::P2pk
+            | InputType::P2pkLaxDer
+            | InputType::P2pkh
+            | InputType::P2pkhLaxDer
+            | InputType::P2sh
+            | InputType::Unknown
+            | InputType::P2shP2wpkh
+            | InputType::P2shP2wsh
+            | InputType::P2wpkh
+            | InputType::P2wsh
+            | InputType::Coinbase
+            | InputType::CoinbaseWitness => false,
+        }
     }
 
-    /// Returns true if the input spends either a P2SH nested P2WPKH or a P2SH nested P2WSH input
+    /// Returns true if the input spends either a P2SH-nested-P2WPKH or a P2SH-nested-P2WSH input
     pub fn is_spending_nested_segwit(&self) -> bool {
         match self.in_type {
             InputType::P2shP2wpkh | InputType::P2shP2wsh => true,
@@ -144,7 +177,7 @@ impl InputSigops for TxIn {
         let mut sigops: usize = 0;
 
         // in P2TR scripts and coinbase inputs, no sigops are counted
-        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase()  {
+        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase() {
             return Ok(0);
         }
 
@@ -821,6 +854,7 @@ mod tests {
         assert!(in0.is_p2trkp());
         assert_eq!(in0.get_type().unwrap(), InputType::P2trkp);
         assert!(InputInfo::new(in0).unwrap().is_spending_taproot());
+        assert!(InputInfo::new(in0).unwrap().is_spending_segwit());
     }
 
     #[test]
@@ -832,6 +866,7 @@ mod tests {
         assert!(in0.is_p2trsp());
         assert_eq!(in0.get_type().unwrap(), InputType::P2trsp);
         assert!(InputInfo::new(in0).unwrap().is_spending_taproot());
+        assert!(InputInfo::new(in0).unwrap().is_spending_segwit());
     }
 
     #[test]
