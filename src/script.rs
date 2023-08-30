@@ -86,32 +86,11 @@ impl Signature for script::Instruction<'_> {
 
 impl Signature for [u8] {
     fn is_ecdsa_signature(&self, strict_der: bool) -> bool {
-        if self.len() < 9 || self.len() > 73 {
-            false
-        } else {
-            let sighash_stripped = &self[..self.len() - 1];
-            if strict_der {
-                secp256k1::Signature::from_der(sighash_stripped).is_ok()
-            } else {
-                secp256k1::Signature::from_der_lax(sighash_stripped).is_ok()
-            }
-        }
+        self.to_vec().is_ecdsa_signature(strict_der)
     }
 
     fn is_schnorr_signature(&self) -> bool {
-        if self.len() == 64 {
-            // As long as we see excatly 64 bytes here, we assume it's a Schnoor signature.
-            return true;
-        } else if self.len() == 65 {
-            let sighash = self.last().unwrap();
-            return *sighash == 0x01u8
-                || *sighash == 0x02u8
-                || *sighash == 0x03u8
-                || *sighash == 0x81u8
-                || *sighash == 0x82u8
-                || *sighash == 0x83u8;
-        }
-        false
+        self.to_vec().is_schnorr_signature()
     }
 }
 
