@@ -6,7 +6,10 @@ use bitcoin::script::Instruction;
 use bitcoin::{Sequence, TxIn};
 use std::fmt;
 
-use crate::script::{instructions_as_vec, Multisig, PublicKey, Signature, SignatureInfo};
+use crate::script::{
+    instructions_as_vec, Multisig, PubKeyInfo, PublicKey, Signature, SignatureInfo,
+};
+
 pub const TAPROOT_ANNEX_INDICATOR: u8 = 0x50;
 pub const TAPROOT_LEAF_TAPSCRIPT: u8 = 0xc0;
 pub const TAPROOT_LEAF_MASK: u8 = 0xfe;
@@ -18,7 +21,7 @@ pub struct InputInfo {
     pub sequence: Sequence,
     pub multisig_info: Option<MultisigInputInfo>,
     pub signature_info: Vec<SignatureInfo>,
-    // TODO: PubKeyStats vec
+    pub pubkey_stats: Vec<PubKeyInfo>,
     // TODO: OpCodes vec?
     // TODO: is_ln_unilateral_closing: bool,
 }
@@ -30,6 +33,7 @@ impl InputInfo {
             in_type: input.get_type()?,
             multisig_info: input.multisig_info()?,
             signature_info: SignatureInfo::all_from(&input)?,
+            pubkey_stats: PubKeyInfo::from_input(&input)?,
         })
     }
 
