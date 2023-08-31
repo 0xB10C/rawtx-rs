@@ -7,8 +7,8 @@ use bitcoin::hash_types::Txid;
 use bitcoin::hashes::Hash;
 use bitcoin::script;
 use bitcoin::{Amount, Transaction, TxIn, TxOut};
-use input::{InputInfo, InputSigops, ScriptHashInput};
-use output::{OutputInfo, OutputSigops, OutputTypeDetection};
+use input::{InputInfo, InputSigops};
+use output::{OutputInfo, OutputSigops};
 use std::collections::HashMap;
 
 #[cfg(feature = "counterparty")]
