@@ -57,7 +57,7 @@ impl TxInfo {
 
         let mut output_infos = vec![];
         for output in tx.output.iter() {
-            output_infos.push(OutputInfo::new(output));
+            output_infos.push(OutputInfo::new(output)?);
         }
 
         Ok(TxInfo {
