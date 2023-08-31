@@ -28,7 +28,7 @@ impl InputInfo {
             sequence: input.sequence,
             in_type: input.get_type()?,
             multisig_info: input.multisig_info()?,
-            signature_info: SignatureInfo::all_from(&input, true)?,
+            signature_info: SignatureInfo::all_from(&input)?,
         })
     }
 
@@ -143,17 +143,17 @@ impl InputInfo {
     }
 }
 
-// Contains information about a multi-signature construct used in an input.
+/// Contains information about a multi-signature construct used in an input.
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct MultisigInputInfo {
-    // Represents the number of needed signatures `m` from the possible
-    // signatures `n`. Example: In a 2-of-3 (m = 2, n = 3) multisig there must
-    // be signatures corresponding to two out of 3 possibly allowed Public Keys
-    // supplied.
+    /// Represents the number of needed signatures `m` from the possible
+    /// signatures `n`. Example: In a 2-of-3 (m = 2, n = 3) multisig there must
+    /// be signatures corresponding to two out of 3 possibly allowed Public Keys
+    /// supplied.
     pub m_of_n: (u8, u8),
-    // For P2MS inputs the n value (number of possible signatures) can not be
-    // retrieved from the P2MS input. This is indicated by this boolean set to
-    // `true`.
+    /// For P2MS inputs the n value (number of possible signatures) can not be
+    /// retrieved from the P2MS input. This is indicated by this boolean set to
+    /// `true`.
     pub unknown_n: bool,
 }
 

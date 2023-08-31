@@ -3,10 +3,20 @@
 use crate::input::{InputType, InputTypeDetection};
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
+use bitcoin::secp256k1::{ecdsa, schnorr};
+use std::convert::TryInto;
 
 // "Maximum number of public keys per multisig"
 // from Bitcoin Core
 const MAX_PUBKEYS_PER_MULTISIG: usize = 20;
+const SECP256K1_HALF_CURVE_ORDER: [u8; 32] = [
+    0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0x5d, 0x57, 0x6e, 0x73, 0x57, 0xa4, 0x50, 0x1d, 0xdf, 0xe9, 0x2f, 0x46, 0x68, 0x1b, 0x20, 0xa0,
+];
+const LOW_R_THRESHOLD: [u8; 32] = [
+    0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
 
 // Helper function collecting the Instructions iterator into a
 // `Vec<script::Instruction>` for easier handling.
@@ -56,7 +66,7 @@ impl PublicKey for Vec<u8> {
 
 pub trait Signature {
     fn is_signature(&self) -> bool {
-        self.is_ecdsa_signature(false)
+        self.is_ecdsa_signature(false) || self.is_schnorr_signature()
     }
     /// Checks if the underlying bytes represent a Bitcoin ECDSA signature.
     /// This function expects that the SigHash is included.
@@ -127,31 +137,68 @@ impl Signature for Vec<u8> {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum SignatureType {
-    Ecdsa,
-    Schnorr,
+    Ecdsa(ecdsa::Signature),
+    Schnorr(schnorr::Signature),
 }
 
 // Contains information about a Bitcoin signature.
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct SignatureInfo {
-    pub sig_type: SignatureType,
+    /// The actual signature wrapped in a type enum.
+    pub signature: SignatureType,
+    /// Inidcates if a ECDSA signature was strictly DER encoded before being decoded. A
+    /// Schnorr signature was never DER encoded.
+    pub was_der_encoded: bool,
+    /// SigHash flag of the signature.
     pub sig_hash: u8,
+    /// length of the encoded signatur.e
     pub length: usize,
-    /// The full, raw signature.
-    pub signature: Vec<u8>,
 }
 
 impl SignatureInfo {
-    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
-    // otherwise None is returned.
-    pub fn from_instruction_ecdsa(
-        instruction: &script::Instruction,
-        strict_der: bool,
-    ) -> Option<SignatureInfo> {
-        if instruction.is_ecdsa_signature(strict_der) {
+    pub fn low_s(&self) -> bool {
+        let compact: [u8; 64];
+        match self.signature {
+            SignatureType::Ecdsa(s) => {
+                compact = s.serialize_compact();
+            }
+            SignatureType::Schnorr(s) => {
+                compact = *s.as_ref();
+            }
+        }
+        let (_, s) = compact.split_at(32);
+        let s: [u8; 32] = s
+            .try_into()
+            .expect("Splitting a 64 byte array in half should procude two 32 byte arrays.");
+
+        return s <= SECP256K1_HALF_CURVE_ORDER;
+    }
+
+    pub fn low_r(&self) -> bool {
+        let compact: [u8; 64];
+        match self.signature {
+            SignatureType::Ecdsa(s) => {
+                compact = s.serialize_compact();
+            }
+            SignatureType::Schnorr(s) => {
+                compact = *s.as_ref();
+            }
+        }
+        let (r, _) = compact.split_at(32);
+        let r: [u8; 32] = r
+            .try_into()
+            .expect("Splitting a 64 byte array in half should procude two 32 byte arrays.");
+
+        return r < LOW_R_THRESHOLD;
+    }
+
+    /// Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
+    /// otherwise None is returned.
+    pub fn from_instruction_ecdsa(instruction: &script::Instruction) -> Option<SignatureInfo> {
+        if instruction.is_ecdsa_signature(false) {
             match instruction {
                 script::Instruction::PushBytes(bytes) => {
-                    return SignatureInfo::from_u8_slice_ecdsa(bytes.as_bytes(), strict_der);
+                    return SignatureInfo::from_u8_slice_ecdsa(bytes.as_bytes());
                 }
                 script::Instruction::Op(_) => return None,
             }
@@ -159,8 +206,8 @@ impl SignatureInfo {
         None
     }
 
-    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin Schnorr Signature,
-    // otherwise None is returned.
+    /// Returns Some(SignatureInfo) if the Instruction is a Bitcoin Schnorr Signature,
+    /// otherwise None is returned.
     pub fn from_instruction_schnorr(instruction: &script::Instruction) -> Option<SignatureInfo> {
         if instruction.is_schnorr_signature() {
             match instruction {
@@ -173,47 +220,67 @@ impl SignatureInfo {
         None
     }
 
-    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
-    // otherwise None is returned.
-    pub fn from_u8_slice_ecdsa(bytes: &[u8], strict_der: bool) -> Option<SignatureInfo> {
-        if bytes.to_vec().is_ecdsa_signature(strict_der) {
-            return Some(SignatureInfo {
-                sig_type: SignatureType::Ecdsa,
-                sig_hash: *bytes.last().unwrap(),
-                length: bytes.len(),
-                signature: bytes.to_vec(),
-            });
+    /// Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
+    /// otherwise None is returned.
+    pub fn from_u8_slice_ecdsa(bytes: &[u8]) -> Option<SignatureInfo> {
+        if bytes.len() < 9 || bytes.len() > 73 {
+            return None;
         }
-        None
+
+        let signature: ecdsa::Signature;
+        let sighash_stripped = &bytes[..bytes.len() - 1];
+        let mut lax_der_encoded = false;
+        if let Ok(sig) = ecdsa::Signature::from_der(sighash_stripped) {
+            signature = sig;
+        } else if let Ok(sig) = ecdsa::Signature::from_der_lax(sighash_stripped) {
+            signature = sig;
+            lax_der_encoded = true;
+        } else {
+            return None;
+        }
+
+        return Some(SignatureInfo {
+            signature: SignatureType::Ecdsa(signature),
+            sig_hash: *bytes.last().unwrap(),
+            length: bytes.len(),
+            was_der_encoded: !lax_der_encoded,
+        });
     }
 
-    // Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
-    // otherwise None is returned.
+    /// Returns Some(SignatureInfo) if the Instruction is a Bitcoin Schnorr Signature,
+    /// otherwise None is returned.
     pub fn from_u8_slice_schnorr(bytes: &[u8]) -> Option<SignatureInfo> {
         if bytes.to_vec().is_schnorr_signature() {
             let sighash: u8;
+            let signature: schnorr::Signature;
             if bytes.len() == 64 {
                 sighash = 0x01u8;
+                signature = match schnorr::Signature::from_slice(bytes) {
+                    Ok(sig) => sig,
+                    Err(_) => return None,
+                }
             } else {
                 sighash = *bytes.last().unwrap();
+                signature = match schnorr::Signature::from_slice(&bytes[..bytes.len() - 1]) {
+                    Ok(sig) => sig,
+                    Err(_) => return None,
+                }
             }
+
             return Some(SignatureInfo {
-                sig_type: SignatureType::Schnorr,
+                signature: SignatureType::Schnorr(signature),
                 sig_hash: sighash,
                 length: bytes.len(),
-                signature: bytes.to_vec(),
+                was_der_encoded: false, // awlways false for Schnorr
             });
         }
         None
     }
 
-    // Constructs a vector of SignatureInfo for all Signatures in the input. If
-    // the inputs script_sig and witness don't contain any signatures, an empty
-    // vector is returned.
-    pub fn all_from(
-        input: &bitcoin::TxIn,
-        strict_der: bool,
-    ) -> Result<Vec<SignatureInfo>, script::Error> {
+    /// Constructs a vector of SignatureInfo for all Signatures in the input. If
+    /// the inputs script_sig and witness don't contain any signatures, an empty
+    /// vector is returned.
+    pub fn all_from(input: &bitcoin::TxIn) -> Result<Vec<SignatureInfo>, script::Error> {
         let input_type = input.get_type()?;
 
         let mut signature_infos = vec![];
@@ -226,7 +293,6 @@ impl SignatureInfo {
                 signature_infos.push(
                     SignatureInfo::from_u8_slice_ecdsa(
                         &input.script_sig.as_script().as_bytes()[1..],
-                        strict_der,
                     )
                     .unwrap(),
                 );
@@ -235,9 +301,8 @@ impl SignatureInfo {
                 // a P2MS script_sig contains up to three signatures after an
                 // initial OP_FALSE.
                 for instruction in instructions_as_vec(&input.script_sig)?[1..].iter() {
-                    signature_infos.push(
-                        SignatureInfo::from_instruction_ecdsa(instruction, strict_der).unwrap(),
-                    );
+                    signature_infos
+                        .push(SignatureInfo::from_instruction_ecdsa(instruction).unwrap());
                 }
             }
             InputType::P2pkh | InputType::P2pkhLaxDer => {
@@ -246,7 +311,6 @@ impl SignatureInfo {
                 signature_infos.push(
                     SignatureInfo::from_instruction_ecdsa(
                         &instructions_as_vec(&input.script_sig)?[0],
-                        strict_der,
                     )
                     .unwrap(),
                 );
@@ -254,18 +318,14 @@ impl SignatureInfo {
             InputType::P2shP2wpkh => {
                 // P2SH wrapped P2WPKH inputs contain the signature as the
                 // first element of the witness.
-                signature_infos.push(
-                    SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0], strict_der)
-                        .unwrap(),
-                );
+                signature_infos
+                    .push(SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0]).unwrap());
             }
             InputType::P2wpkh => {
                 // P2WPKH inputs contain the signature as the first element of
                 // the witness.
-                signature_infos.push(
-                    SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0], strict_der)
-                        .unwrap(),
-                )
+                signature_infos
+                    .push(SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0]).unwrap())
             }
             InputType::P2sh => {
                 // P2SH inputs can contain zero or multiple signatures in
@@ -273,8 +333,7 @@ impl SignatureInfo {
                 // in the redeem script.
                 let instructions = instructions_as_vec(&input.script_sig)?;
                 for instruction in instructions[..instructions.len() - 1].iter() {
-                    if let Some(signature_info) =
-                        SignatureInfo::from_instruction_ecdsa(instruction, strict_der)
+                    if let Some(signature_info) = SignatureInfo::from_instruction_ecdsa(instruction)
                     {
                         signature_infos.push(signature_info);
                     }
@@ -285,9 +344,7 @@ impl SignatureInfo {
                 // the witness. It's very uncommon that signatures are placed
                 // in the witness (redeem) script.
                 for bytes in input.witness.to_vec()[..input.witness.len() - 1].iter() {
-                    if let Some(signature_info) =
-                        SignatureInfo::from_u8_slice_ecdsa(bytes, strict_der)
-                    {
+                    if let Some(signature_info) = SignatureInfo::from_u8_slice_ecdsa(bytes) {
                         signature_infos.push(signature_info);
                     }
                 }
@@ -297,9 +354,7 @@ impl SignatureInfo {
                 // the witness. It's very uncommon that signatures are placed
                 // in the witness (redeem) script.
                 for bytes in input.witness.to_vec()[..input.witness.len() - 1].iter() {
-                    if let Some(signature_info) =
-                        SignatureInfo::from_u8_slice_ecdsa(bytes, strict_der)
-                    {
+                    if let Some(signature_info) = SignatureInfo::from_u8_slice_ecdsa(bytes) {
                         signature_infos.push(signature_info);
                     }
                 }
@@ -575,5 +630,140 @@ mod tests {
         println!("multisig_script_2: {}", multisig_script_2);
         assert_eq!(multisig_script_2.sigops(false).unwrap(), 3);
         assert_eq!(multisig_script_2.sigops(true).unwrap(), 21);
+    }
+
+    pub struct SignatureInfoTestcase {
+        pub sig: String,
+        pub length: usize,
+        pub sighash: u8,
+        pub low_r: bool,
+        pub low_s: bool,
+        pub der_encoded: bool,
+    }
+
+    #[test]
+    fn schnorr_signature_info_test() {
+        use super::Signature;
+        use super::SignatureInfo;
+
+        let testcases = vec![
+            // #0 from https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv
+            SignatureInfoTestcase {
+                sig: "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0".to_string(),
+                length: 64,
+                sighash: 0x01,
+                low_s: true,
+                low_r: false,
+                der_encoded: false,
+            },
+            // #0 from https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv with explicit sighash flag
+            SignatureInfoTestcase {
+                sig: "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C001".to_string(),
+                length: 65,
+                sighash: 0x01,
+                low_s: true,
+                low_r: false,
+                der_encoded: false,
+            },
+            // #0 from https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv with non-default sighash flag
+            SignatureInfoTestcase {
+                sig: "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C002".to_string(),
+                length: 65,
+                sighash: 0x02,
+                low_s: true,
+                low_r: false,
+                der_encoded: false,
+            },
+            // just above r-threshold (not-low r) & half curve order (-> low s)
+            SignatureInfoTestcase {
+                sig: "80000000AA9B2FFCB6EF947B6887A226E8D7C93E00C5ED0C1834FF0D0C2E6DA67fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0".to_string(),
+                length: 64,
+                sighash: 0x01,
+                low_s: true,
+                low_r: false,
+                der_encoded: false,
+            },
+            // just below r-threshold (low r) & half curve order + 1(-> not-low s)
+            SignatureInfoTestcase {
+                sig: "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a1".to_string(),
+                length: 64,
+                sighash: 0x01,
+                low_s: false,
+                low_r: true,
+                der_encoded: false,
+            },
+        ];
+
+        for testcase in testcases.iter() {
+            let s = ScriptBuf::from_hex(&testcase.sig).unwrap().into_bytes();
+            assert!(s.is_schnorr_signature());
+            assert!(!s.is_ecdsa_signature(false));
+            let si = SignatureInfo::from_u8_slice_schnorr(&s).unwrap();
+
+            println!("test signature: {}", testcase.sig);
+            assert_eq!(si.was_der_encoded, false); // always false for schnorr
+            assert_eq!(si.length, testcase.length, "");
+            assert_eq!(si.sig_hash, testcase.sighash, "sighash flag");
+            assert_eq!(si.low_s(), testcase.low_s, "low s?");
+            assert_eq!(si.low_r(), testcase.low_r, "low r?");
+        }
+    }
+
+    #[test]
+    fn ecdsa_signature_info_test() {
+        use super::Signature;
+        use super::SignatureInfo;
+
+        let testcases = vec![
+            // BIP 66 example 1 (DER encoded)
+            SignatureInfoTestcase {
+                sig: "30440220d7a0417c3f6d1a15094d1cf2a3378ca0503eb8a57630953a9e2987e21ddd0a6502207a6266d686c99090920249991d3d42065b6d43eb70187b219c0db82e4f94d1a201".to_string(),
+                length: 71,
+                sighash: 0x01,
+                low_s: true,
+                low_r: true,
+                der_encoded: true,
+            },
+            SignatureInfoTestcase {
+                sig: "30440220cad9530d55219cf16ed352385961288fb50f162f791dce23aafef91ede284fe60220a890a5608f42a2ece4c9e6d078f94ba7f93ff9f978ae4373abe97f1bd6c6af3201".to_string(),
+                length: 71,
+                sighash: 0x01,
+                low_s: true,
+                low_r: true,
+                der_encoded: true,
+            },
+            // Input 0 of 39baeb3b2579dac22cec858be3a4d70d8d229206127b43fa4133ed63fb7b1b40
+            SignatureInfoTestcase {
+                sig: "304502200064ddabf1af28c21103cf61cf19dbef814aff2eba0440c5e5e20a605d16d780022100f45c4bc6a4ab317dc3a600129fc6a87a0df6329dbc71c5fcca9effdb30f1857901".to_string(),
+                length: 72,
+                sighash: 0x01,
+                low_s: false,
+                low_r: true,
+                der_encoded: false,
+            },
+            // Input 0 of f4597ab5b6d45ba3a04486f3edf1a27f9f2cc3ab23300eb16d6b7067b8cf47dd
+            SignatureInfoTestcase {
+                sig: "3046022100eb232172f28bc933f8bd0b5c40c83f98d01792ed45c4832a887d4e95bff3322a022100f4d7ee1d3b8f71995f197ffcdd4e5b2327a735c5edca12724502051f33cb18c081".to_string(),
+                length: 73,
+                sighash: 0x81,
+                low_s: false,
+                low_r: false,
+                der_encoded: true,
+            },
+        ];
+
+        for testcase in testcases.iter() {
+            println!("test signature: {}", testcase.sig);
+            let s = ScriptBuf::from_hex(&testcase.sig).unwrap().into_bytes();
+            assert!(s.is_ecdsa_signature(false));
+            assert!(!s.is_schnorr_signature());
+            let si = SignatureInfo::from_u8_slice_ecdsa(&s).unwrap();
+
+            assert_eq!(si.was_der_encoded, testcase.der_encoded, "der encoded?");
+            assert_eq!(si.length, testcase.length, "length");
+            assert_eq!(si.sig_hash, testcase.sighash, "sighash flag");
+            assert_eq!(si.low_s(), testcase.low_s, "low s?");
+            assert_eq!(si.low_r(), testcase.low_r, "low r?");
+        }
     }
 }
