@@ -1,9 +1,10 @@
 //! Information about Bitcoin PubKeys, Signatures and MultiSig constructs.
 
-use crate::input::{InputType, InputTypeDetection};
+use crate::input::{InputType, InputTypeDetection, ScriptHashInput};
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
 use bitcoin::secp256k1::{ecdsa, schnorr};
+//use bitcoin::secp256k1;
 use std::convert::TryInto;
 
 const SECP256K1_HALF_CURVE_ORDER: [u8; 32] = [
@@ -30,6 +31,7 @@ pub trait PublicKey {
         self.is_ecdsa_pubkey()
     }
     fn is_ecdsa_pubkey(&self) -> bool;
+    fn is_schnorr_pubkey(&self) -> bool;
 }
 
 impl PublicKey for script::Instruction<'_> {
@@ -39,25 +41,52 @@ impl PublicKey for script::Instruction<'_> {
             script::Instruction::Op(_) => false,
         }
     }
+
+    fn is_schnorr_pubkey(&self) -> bool {
+        match self {
+            script::Instruction::PushBytes(bytes) => bytes.as_bytes().is_schnorr_pubkey(),
+            script::Instruction::Op(_) => false,
+        }
+    }
 }
 
 impl PublicKey for [u8] {
     fn is_ecdsa_pubkey(&self) -> bool {
-        // Public keys should either be 33 bytes or 65 bytes long
-        if self.len() != 33 && self.len() != 65 {
+        // ECDSA Public keys should either be 33 bytes or 65 bytes long
+        if self.len() != bitcoin::key::constants::PUBLIC_KEY_SIZE
+            && self.len() != bitcoin::key::constants::UNCOMPRESSED_PUBLIC_KEY_SIZE
+        {
             return false;
         }
         bitcoin::PublicKey::from_slice(self).is_ok()
+    }
+
+    fn is_schnorr_pubkey(&self) -> bool {
+        // Schnorr public keys should be 32 byte long
+        if self.len() != bitcoin::key::constants::SCHNORR_PUBLIC_KEY_SIZE {
+            return false;
+        }
+        bitcoin::key::XOnlyPublicKey::from_slice(self).is_ok()
     }
 }
 
 impl PublicKey for Vec<u8> {
     fn is_ecdsa_pubkey(&self) -> bool {
-        // Public keys should either be 33 bytes or 65 bytes long
-        if self.len() != 33 && self.len() != 65 {
+        // ECDSA Public keys should either be 33 bytes or 65 bytes long
+        if self.len() != bitcoin::key::constants::PUBLIC_KEY_SIZE
+            && self.len() != bitcoin::key::constants::UNCOMPRESSED_PUBLIC_KEY_SIZE
+        {
             return false;
         }
         bitcoin::PublicKey::from_slice(self).is_ok()
+    }
+
+    fn is_schnorr_pubkey(&self) -> bool {
+        // Schnorr public keys should be 32 byte long
+        if self.len() != bitcoin::key::constants::SCHNORR_PUBLIC_KEY_SIZE {
+            return false;
+        }
+        bitcoin::key::XOnlyPublicKey::from_slice(self).is_ok()
     }
 }
 
@@ -475,6 +504,119 @@ impl Multisig for bitcoin::Script {
         }
 
         Ok(Some((n, m)))
+    }
+}
+
+#[derive(Debug)]
+pub enum PubkeyType {
+    ECDSA,
+    Schnorr,
+}
+
+/// Information about a Pubkey
+#[derive(Debug)]
+pub struct PubKeyInfo {
+    /// If the pubkey is compressed. Only ECDSA pubkey can be uncompressed.
+    pub compressed: bool,
+    pub pubkey_type: PubkeyType,
+}
+
+impl PubKeyInfo {
+    pub fn from_instruction_ecdsa(instruction: &script::Instruction) -> Option<PubKeyInfo> {
+        match instruction {
+            script::Instruction::PushBytes(bytes) => {
+                PubKeyInfo::from_u8_slice_ecdsa(bytes.as_bytes())
+            }
+            script::Instruction::Op(_) => None,
+        }
+    }
+
+    pub fn from_u8_slice_ecdsa(bytes: &[u8]) -> Option<PubKeyInfo> {
+        if bytes.is_ecdsa_pubkey() {
+            return Some(PubKeyInfo {
+                compressed: bytes.len() == bitcoin::key::constants::PUBLIC_KEY_SIZE,
+                pubkey_type: PubkeyType::ECDSA,
+            });
+        }
+        None
+    }
+
+    pub fn from_input(input: &bitcoin::TxIn) -> Result<Vec<PubKeyInfo>, script::Error> {
+        let input_type = input.get_type()?;
+
+        let mut pubkey_infos = vec![];
+
+        match input_type {
+            // a P2PK script_sig consists of a single signature. No public key.
+            InputType::P2pk | InputType::P2pkLaxDer => (),
+            // a P2MS script_sig contains up to three signatures after an
+            // initial OP_FALSE. No public key.
+            InputType::P2ms | InputType::P2msLaxDer => (),
+            InputType::P2pkh | InputType::P2pkhLaxDer => {
+                // P2PKH inputs have a signature as the first element and a public key as the second element of the script_sig.
+                pubkey_infos.push(
+                    PubKeyInfo::from_instruction_ecdsa(&instructions_as_vec(&input.script_sig)?[1])
+                        .unwrap(),
+                );
+            }
+            InputType::P2shP2wpkh => {
+                // P2SH wrapped P2WPKH inputs contain the signature as the first and
+                // the pubkey as the second element of the witness.
+                pubkey_infos
+                    .push(PubKeyInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[1]).unwrap());
+            }
+            InputType::P2wpkh => {
+                // P2WPKH inputs contain the signature as the first and
+                // the pubkey as the second element of the witness.
+                pubkey_infos
+                    .push(PubKeyInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[1]).unwrap())
+            }
+            InputType::P2sh => {
+                // P2SH inputs usually contain public keys in the witness redeem script
+                if let Some(redeem_script) = input.redeem_script().unwrap() {
+                    let instructions = instructions_as_vec(&redeem_script)?;
+                    for instruction in instructions.iter() {
+                        if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                            pubkey_infos.push(pubkey_info);
+                        }
+                    }
+                }
+            }
+            InputType::P2shP2wsh => {
+                // P2SH wrapped P2WSH inputs usually contain public keys in the witness redeem script
+                if let Some(redeem_script) = input.redeem_script().unwrap() {
+                    let instructions = instructions_as_vec(&redeem_script)?;
+                    for instruction in instructions.iter() {
+                        if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                            pubkey_infos.push(pubkey_info);
+                        }
+                    }
+                }
+            }
+            InputType::P2wsh => {
+                // P2WSH inputs usually contain public keys in the witness redeem script
+                if let Some(redeem_script) = input.redeem_script().unwrap() {
+                    let instructions = instructions_as_vec(&redeem_script)?;
+                    for instruction in instructions.iter() {
+                        if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                            pubkey_infos.push(pubkey_info);
+                        }
+                    }
+                }
+            }
+            // P2TR key-path spends do not contain a public key.
+            InputType::P2trkp => (),
+            // TODO: there could be multiple public keys in the script path spent
+            // However, this is currently not implemented here.
+            InputType::P2trsp => (),
+            // exhaustive so the compiler warns us if we forget to add an input
+            // type here.
+            InputType::Unknown => (),
+            InputType::Coinbase => (),
+            InputType::CoinbaseWitness => (),
+        }
+
+        Ok(pubkey_infos)
     }
 }
 
