@@ -4,20 +4,22 @@ use std::fmt;
 
 use bitcoin::{blockdata::opcodes::all as opcodes, script, Amount, TxOut};
 
-use crate::script::Multisig;
+use crate::script::{Multisig, PubKeyInfo};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct OutputInfo {
     pub out_type: OutputType,
     pub value: Amount,
+    pub pubkey_stats: Vec<PubKeyInfo>,
 }
 
 impl OutputInfo {
-    pub fn new(output: &TxOut) -> OutputInfo {
-        OutputInfo {
+    pub fn new(output: &TxOut) -> Result<OutputInfo, script::Error> {
+        Ok(OutputInfo {
             out_type: output.get_type(),
             value: Amount::from_sat(output.value.to_sat()),
-        }
+            pubkey_stats: PubKeyInfo::from_output(&output)?,
+        })
     }
 
     /// Returns true if the output is an OP_RETURN output (of any [OpReturnFlavor]).

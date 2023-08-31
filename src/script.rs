@@ -1,6 +1,7 @@
 //! Information about Bitcoin PubKeys, Signatures and MultiSig constructs.
 
 use crate::input::{InputType, InputTypeDetection, ScriptHashInput};
+use crate::output::{OutputType, OutputTypeDetection};
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
 use bitcoin::secp256k1::{ecdsa, schnorr};
@@ -507,14 +508,14 @@ impl Multisig for bitcoin::Script {
     }
 }
 
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum PubkeyType {
     ECDSA,
     Schnorr,
 }
 
 /// Information about a Pubkey
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct PubKeyInfo {
     /// If the pubkey is compressed. Only ECDSA pubkey can be uncompressed.
     pub compressed: bool,
@@ -614,6 +615,48 @@ impl PubKeyInfo {
             InputType::Unknown => (),
             InputType::Coinbase => (),
             InputType::CoinbaseWitness => (),
+        }
+
+        Ok(pubkey_infos)
+    }
+
+    pub fn from_output(output: &bitcoin::TxOut) -> Result<Vec<PubKeyInfo>, script::Error> {
+        let output_type = output.get_type();
+
+        let mut pubkey_infos = vec![];
+
+        match output_type {
+            OutputType::P2pk => {
+                if let Some(pk_info) = PubKeyInfo::from_instruction_ecdsa(
+                    &instructions_as_vec(&output.script_pubkey)?[0],
+                ) {
+                    pubkey_infos.push(pk_info);
+                }
+            }
+            OutputType::P2ms => {
+                // There can be up to three ECDSA public keys in P2MS outputs
+                for instruction in instructions_as_vec(&output.script_pubkey)?.iter() {
+                    match instruction {
+                        script::Instruction::PushBytes(bytes) => {
+                            pubkey_infos
+                                .push(PubKeyInfo::from_u8_slice_ecdsa(bytes.as_bytes()).unwrap());
+                        }
+                        script::Instruction::Op(_) => (),
+                    }
+                }
+            }
+            OutputType::P2tr => {
+                pubkey_infos.push(PubKeyInfo {
+                    compressed: true,
+                    pubkey_type: PubkeyType::Schnorr,
+                });
+            }
+            OutputType::P2pkh
+            | OutputType::P2wpkhV0
+            | OutputType::P2wshV0
+            | OutputType::P2sh
+            | OutputType::OpReturn(_)
+            | OutputType::Unknown => (),
         }
 
         Ok(pubkey_infos)
