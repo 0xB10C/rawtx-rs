@@ -17,6 +17,10 @@ use crate::script::{instructions_as_vec, Multisig};
 use bitcoin::blockdata::script::Instruction;
 #[cfg(feature = "counterparty")]
 use rc4::{consts::U32, Key, KeyInit, Rc4, StreamCipher};
+#[cfg(feature = "counterparty")]
+use crate::output::OutputTypeDetection;
+#[cfg(feature = "counterparty")]
+use crate::input::ScriptHashInput;
 
 #[derive(Debug)]
 pub struct TxInfo {
