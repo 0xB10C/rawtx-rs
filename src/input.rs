@@ -2,14 +2,17 @@
 
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
+use bitcoin::script::Instruction;
 use bitcoin::{Sequence, TxIn};
 use std::fmt;
 
-use crate::script::{Multisig, PublicKey, ScriptSigOps, Signature, SignatureInfo};
-
+use crate::script::{
+    instructions_as_vec, Multisig, PublicKey, ScriptSigOps, Signature, SignatureInfo,
+};
 pub const TAPROOT_ANNEX_INDICATOR: u8 = 0x50;
 pub const TAPROOT_LEAF_TAPSCRIPT: u8 = 0xc0;
 pub const TAPROOT_LEAF_MASK: u8 = 0xfe;
+pub const ORDINALS_INSCRIPTION_MARKER: [u8; 3] = [0x6f, 0x72, 0x64]; // ASCII "ord"
 
 #[derive(Debug)]
 pub struct InputInfo {
@@ -728,12 +731,60 @@ impl InputTypeDetection for TxIn {
     }
 }
 
+pub trait InputInscriptionDetection {
+    fn reveals_inscription(&self) -> Result<bool, script::Error>;
+}
+
+impl InputInscriptionDetection for TxIn {
+    fn reveals_inscription(&self) -> Result<bool, script::Error> {
+        if !self.is_p2trsp() {
+            return Ok(false);
+        }
+        // Inscription reveals can be identified by inspecting the tapscript
+        if let Some(tapscript) = self.witness.tapscript() {
+            if let Ok(instructions) = instructions_as_vec(tapscript) {
+                let mut instruction_iter = instructions.iter();
+                while let Some(instruction) = instruction_iter.next() {
+                    if matches!(instruction, Instruction::PushBytes(bytes) if bytes.is_empty()) {
+                        if matches!(instruction_iter.next(), Some(Instruction::Op(op)) if op == &opcodes::OP_IF)
+                        {
+                            if matches!(instruction_iter.next(), Some(Instruction::PushBytes(bytes)) if bytes.as_bytes() == ORDINALS_INSCRIPTION_MARKER.to_vec())
+                            {
+                                return Ok(true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        InputInfo, InputMultisigDetection, InputType, InputTypeDetection, MultisigInputInfo,
+        InputInfo, InputInscriptionDetection, InputMultisigDetection, InputType,
+        InputTypeDetection, MultisigInputInfo,
     };
     use bitcoin::Transaction;
+
+    #[test]
+    fn reveals_inscription() {
+        // mainnet ba4f42037f92c2782ee3dd8c75ce0ce80d8a04b8d36e6ed6a36452f512e66dfd
+        let rawtx = hex::decode("02000000000101da5159649742d35e069f74724bb72cbb116415d72e11771a17420e2201d4ecf30000000000fdffffff0122020000000000002251201e6960b35d5da5c6c9ce0a18d989518bf546b4968a4ad046d9d664f5585f50440340ad42d4bec479e22866603b11048a64a3e5d366046d494278336798a51fd5fe5166221949e3025b25b505433ed871e20399fd82ffc867b70de8acef8e86f91f857e20318de3d918b6ca5ce115f5b00b3ed0b9c85ca7ebe8f0ccbe9de0e05e45de9293ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d3800387b2270223a226272632d3230222c226f70223a227472616e73666572222c227469636b223a224d4d5353222c22616d74223a22323030227d6821c1318de3d918b6ca5ce115f5b00b3ed0b9c85ca7ebe8f0ccbe9de0e05e45de929300000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let in0 = &tx.input[0];
+        assert!(in0.is_p2trsp());
+        assert!(in0.reveals_inscription().unwrap());
+
+        // mainnet 8cf0e9c282233d72bae9b90a8f5b656d5decaa75c4a8ad54f457e45cd087d295
+        let rawtx = hex::decode("02000000000101db7427b32d5755c1ea1fad429d87e6a641a2682e53c0c7cfaf3bec578c349b680000000000fdffffff022202000000000000225120f97a587234b7e22e7b5de2d61b1861e0c8774eedb9b48190fabe41b083d24926db06000000000000160014d02d8c6d6b2307d96bc2bf99e89acab7fb3a923003402817599a681318c55b335f5fb29e6755a4f23e345a8dc130cb1e478f2dec76f748378d279f5b82ca70587d91caff2f906146df28785931b09f186489f317c2add020287b98bfb98dd21a639ee15a8414e70f4bb5f8747961f4c2ef1596519d465db1ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004c897b2270223a2022746170222c20226f70223a2022646d742d6d696e74222c2022646570223a2022303161393235393934656563313435313261653935386466313761353231666437663835616636613731633132373061656332303432323866613661613336346930222c20227469636b223a20226e6174222c2022626c6b223a202231363934227d6821c1f7f702f2e97e53bd22500cc1207871e88abba8871df5495ad16f3c73a5d7460e00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let in0 = &tx.input[0];
+        assert!(in0.is_p2trsp());
+        assert!(in0.reveals_inscription().unwrap());
+    }
 
     #[test]
     fn input_type_detection_p2pk() {
@@ -889,6 +940,7 @@ mod tests {
         assert_eq!(in0.get_type().unwrap(), InputType::P2trsp);
         assert!(InputInfo::new(in0).unwrap().is_spending_taproot());
         assert!(InputInfo::new(in0).unwrap().is_spending_segwit());
+        assert!(!in0.reveals_inscription().unwrap());
     }
 
     #[test]
