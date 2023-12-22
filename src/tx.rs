@@ -62,11 +62,11 @@ impl TxInfo {
 
         Ok(TxInfo {
             txid: tx.txid(),
-            version: tx.version,
+            version: tx.version.0,
             payments,
             vsize: tx.vsize() as u64,
             weight: tx.weight().to_wu() as u64,
-            is_coinbase: tx.is_coin_base(),
+            is_coinbase: tx.is_coinbase(),
             is_bip69_compliant: is_bip69_compliant(&tx.input, &tx.output),
             locktime: tx.lock_time,
             input_infos,
@@ -265,7 +265,7 @@ fn is_bip69_compliant(inputs: &[TxIn], outputs: &[TxOut]) -> bool {
 #[cfg(feature = "counterparty")]
 /// Returns true if the transaction is an OP_RETURN CounterParty transaction.
 pub fn is_opreturn_counterparty(tx: &Transaction) -> bool {
-    if tx.is_coin_base() {
+    if tx.is_coinbase() {
         return false;
     }
 
@@ -303,7 +303,7 @@ pub fn is_opreturn_counterparty(tx: &Transaction) -> bool {
 #[cfg(feature = "counterparty")]
 /// Returns true if the transaction is a multisig (P2MS) CounterParty transaction.
 pub fn is_p2ms_counterparty(tx: &Transaction) -> bool {
-    if tx.is_coin_base() {
+    if tx.is_coinbase() {
         return false;
     }
 
@@ -361,7 +361,7 @@ pub fn is_p2ms_counterparty(tx: &Transaction) -> bool {
 #[cfg(feature = "counterparty")]
 /// Returns true if the transaction is a P2SH CounterParty transaction.
 pub fn is_p2sh_counterparty(tx: &Transaction) -> bool {
-    if tx.is_coin_base() {
+    if tx.is_coinbase() {
         return false;
     }
 
