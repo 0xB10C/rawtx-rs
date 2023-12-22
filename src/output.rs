@@ -16,7 +16,7 @@ impl OutputInfo {
     pub fn new(output: &TxOut) -> OutputInfo {
         OutputInfo {
             out_type: output.get_type(),
-            value: Amount::from_sat(output.value),
+            value: Amount::from_sat(output.value.to_sat()),
         }
     }
 
@@ -101,9 +101,9 @@ impl OutputTypeDetection for TxOut {
             OutputType::P2pkh
         } else if self.script_pubkey.is_p2sh() {
             OutputType::P2sh
-        } else if self.script_pubkey.is_v0_p2wpkh() {
+        } else if self.script_pubkey.is_p2wpkh() {
             OutputType::P2wpkhV0
-        } else if self.script_pubkey.is_v0_p2wsh() {
+        } else if self.script_pubkey.is_p2wsh() {
             OutputType::P2wshV0
         } else if self.is_p2tr() {
             OutputType::P2tr
