@@ -6,9 +6,7 @@ use bitcoin::script::Instruction;
 use bitcoin::{Sequence, TxIn};
 use std::fmt;
 
-use crate::script::{
-    instructions_as_vec, Multisig, PublicKey, ScriptSigOps, Signature, SignatureInfo,
-};
+use crate::script::{instructions_as_vec, Multisig, PublicKey, Signature, SignatureInfo};
 pub const TAPROOT_ANNEX_INDICATOR: u8 = 0x50;
 pub const TAPROOT_LEAF_TAPSCRIPT: u8 = 0xc0;
 pub const TAPROOT_LEAF_MASK: u8 = 0xfe;
@@ -202,23 +200,24 @@ impl InputSigops for TxIn {
         let mut sigops: usize = 0;
 
         // in P2TR scripts and coinbase inputs, no sigops are counted
-        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase() || self.is_coinbase_witness() {
+        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase() || self.is_coinbase_witness()
+        {
             return Ok(0);
         }
 
         // While very very seldom, there can be sigops in the inputs script_sig
-        sigops += SIGOPS_SCALE_FACTOR * self.script_sig.sigops(false)?;
+        sigops += SIGOPS_SCALE_FACTOR * self.script_sig.count_sigops_legacy();
 
         match self.get_type()? {
             // sigops in P2SH redeem scripts (pre SegWit) are scaled by 4
             InputType::P2sh => {
                 if let Some(redeem_script) = self.redeem_script()? {
-                    sigops += SIGOPS_SCALE_FACTOR * redeem_script.sigops(false)?;
+                    sigops += SIGOPS_SCALE_FACTOR * redeem_script.count_sigops();
                 }
             }
             InputType::P2shP2wsh | InputType::P2wsh => {
                 if let Some(redeem_script) = self.redeem_script()? {
-                    sigops += redeem_script.sigops(false)?;
+                    sigops += redeem_script.count_sigops();
                 }
             }
             // P2SH-P2WPKH and P2WPKH always have one sigop

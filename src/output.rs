@@ -4,7 +4,7 @@ use std::fmt;
 
 use bitcoin::{blockdata::opcodes::all as opcodes, script, Amount, TxOut};
 
-use crate::script::{Multisig, ScriptSigOps};
+use crate::script::Multisig;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct OutputInfo {
@@ -269,11 +269,8 @@ impl OutputSigops for TxOut {
             return Ok(0);
         }
 
-        if self.is_p2ms() {
-            return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.sigops(true)?);
-        }
-
-        return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.sigops(false)?);
+        // for example, for P2MS script_pubkeys (OP_CHECKMUTLISIG)
+        return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.count_sigops_legacy());
     }
 }
 
