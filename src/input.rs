@@ -202,7 +202,7 @@ impl InputSigops for TxIn {
         let mut sigops: usize = 0;
 
         // in P2TR scripts and coinbase inputs, no sigops are counted
-        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase() {
+        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase() || self.is_coinbase_witness() {
             return Ok(0);
         }
 
