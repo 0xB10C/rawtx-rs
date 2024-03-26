@@ -12,15 +12,15 @@ use output::{OutputInfo, OutputSigops};
 use std::collections::HashMap;
 
 #[cfg(feature = "counterparty")]
+use crate::input::ScriptHashInput;
+#[cfg(feature = "counterparty")]
+use crate::output::OutputTypeDetection;
+#[cfg(feature = "counterparty")]
 use crate::script::{instructions_as_vec, Multisig};
 #[cfg(feature = "counterparty")]
 use bitcoin::blockdata::script::Instruction;
 #[cfg(feature = "counterparty")]
 use rc4::{consts::U32, Key, KeyInit, Rc4, StreamCipher};
-#[cfg(feature = "counterparty")]
-use crate::output::OutputTypeDetection;
-#[cfg(feature = "counterparty")]
-use crate::input::ScriptHashInput;
 
 #[derive(Debug)]
 pub struct TxInfo {
@@ -212,6 +212,7 @@ impl TxInfo {
 }
 pub trait TransactionSigops {
     fn sigops(&self) -> Result<usize, script::Error>;
+    fn sigopsnew(&self) -> Result<usize, script::Error>;
 }
 
 impl TransactionSigops for Transaction {
@@ -222,6 +223,17 @@ impl TransactionSigops for Transaction {
         }
         for output in self.output.iter() {
             sigops += output.sigops()?
+        }
+        return Ok(sigops);
+    }
+
+    fn sigopsnew(&self) -> Result<usize, script::Error> {
+        let mut sigops: usize = 0;
+        for input in self.input.iter() {
+            sigops += input.sigopsnew()?
+        }
+        for output in self.output.iter() {
+            sigops += output.sigopsnew()?
         }
         return Ok(sigops);
     }
@@ -438,6 +450,8 @@ mod tests {
             (8, "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff6403ac9b0c2cfabe6d6d654b01255ebb409c165395395b3f3c2301f032f53df45cba5ed5d266dc2c786010000000f09f909f092f4632506f6f6c2f7300000000000000000000000000000000000000000000000000000000000000000000000500ae970800000000000422020000000000001976a914c6740a12d0a7d556f89782bf5faf0e12cf25a63988ac1ebc4025000000001976a914c825a1ecf2a6830c4401620c3a16f1995057c2ab88ac00000000000000002f6a2d434f524501a21cbd3caa4fe89bccd1d716c92ce4533e4d4733bdb2a04b4ccf74792cc6753c27c5fd5f1d6458bf00000000000000002c6a4c2952534b424c4f434b3acd2e3ba1354794d09aabccd650c2155ae16cd9830cc9b0d57aecd423005ba3a64940a53f"),
             // failed the input check with EarlyEndOfScript, as we didn't skip the sigops counting for witness coinbase scripts 
             (0, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff5803ad9b0c1b4d696e656420627920416e74506f6f6c3936312900e50185de0c73fabe6d6d4045cd649213cd20a5b9fbc8e8d110413043505dd479aa610953d960b83bc22e10000000000000000000ca8d0370000000000000ffffffff05220200000000000017a91442402a28dd61f2718a4b27ae72a4791d5bbdade787821dea280000000017a9144b09d828dfc8baaba5d04ee77397e04b1050cc73870000000000000000266a24aa21a9ed7d3074d041ce338acb516547585351a0d058c476cf2b91141fa94db4096d3aea00000000000000002f6a2d434f524501a37cf4faa0758b26dca666f3e36d42fa15cc01065997be5a09d05bb9bac27ec60419d0b373f32b2000000000000000002b6a2952534b424c4f434b3a6b102098d342b6868cb55909ae57bec35e74ded30cc9b0d57aecd423005ba3ab0120000000000000000000000000000000000000000000000000000000000000000000000000"),
+            // failed the output check with EarlyEndOfScript, as we failed on outputs pushing past the end
+            (0, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff2f0363740c0474d64e652f7a7a616d78632f76649b3c094f135bf4b83108c14ea85f1226746ff200b4020000ffffffffffffffff03a1defc2900000000160014b6f3cfc20084e3b9f0d12b0e6f9da8fcbcf5a2d90000000000000000266a24aa21a9ed22e7492ea82d70262d12e74db7b7813d93365a2bf528aa803b191a209272a65f00000000000000002cfabe6d6d14c8eef25658e2e29cf3580d3c0cfe6cf5ece1bfba5949e1b44de824cc5c4be7010000000000000001200000000000000000000000000000000000000000000000000000000000000000a1233f55"),
         ];
 
         for (sigops, rawtx) in tx_sigops_pairs.iter() {

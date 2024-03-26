@@ -1,14 +1,13 @@
 //! Information about Bitcoin transaction inputs.
 
+use crate::script::ScriptSigOps;
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
 use bitcoin::script::Instruction;
 use bitcoin::{Sequence, TxIn};
 use std::fmt;
 
-use crate::script::{
-    instructions_as_vec, Multisig, PublicKey, ScriptSigOps, Signature, SignatureInfo,
-};
+use crate::script::{instructions_as_vec, Multisig, PublicKey, Signature, SignatureInfo};
 pub const TAPROOT_ANNEX_INDICATOR: u8 = 0x50;
 pub const TAPROOT_LEAF_TAPSCRIPT: u8 = 0xc0;
 pub const TAPROOT_LEAF_MASK: u8 = 0xfe;
@@ -194,6 +193,7 @@ impl InputMultisigDetection for TxIn {
 
 pub trait InputSigops {
     fn sigops(&self) -> Result<usize, script::Error>;
+    fn sigopsnew(&self) -> Result<usize, script::Error>;
 }
 
 impl InputSigops for TxIn {
@@ -202,7 +202,8 @@ impl InputSigops for TxIn {
         let mut sigops: usize = 0;
 
         // in P2TR scripts and coinbase inputs, no sigops are counted
-        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase() || self.is_coinbase_witness() {
+        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase() || self.is_coinbase_witness()
+        {
             return Ok(0);
         }
 
@@ -230,7 +231,44 @@ impl InputSigops for TxIn {
 
         return Ok(sigops);
     }
-}
+
+    fn sigopsnew(&self) -> Result<usize, script::Error> {
+        const SIGOPS_SCALE_FACTOR: usize = 4;
+        let mut sigops: usize = 0;
+
+        // in P2TR scripts and coinbase inputs, no sigops are counted
+        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase() || self.is_coinbase_witness()
+        {
+            return Ok(0);
+        }
+
+        // While very very seldom, there can be sigops in the inputs script_sig
+        sigops += SIGOPS_SCALE_FACTOR * self.script_sig.count_sigops_legacy();
+
+        match self.get_type()? {
+            // sigops in P2SH redeem scripts (pre SegWit) are scaled by 4
+            InputType::P2sh => {
+                if let Some(redeem_script) = self.redeem_script()? {
+                    sigops += SIGOPS_SCALE_FACTOR * redeem_script.count_sigops();
+                }
+            }
+            InputType::P2shP2wsh | InputType::P2wsh => {
+                if let Some(redeem_script) = self.redeem_script()? {
+                    sigops += redeem_script.count_sigops();
+                }
+            }
+            // P2SH-P2WPKH and P2WPKH always have one sigop
+            InputType::P2shP2wpkh | InputType::P2wpkh => {
+                sigops += 1;
+            }
+            //new
+            _ => (),
+        };
+        //new
+        return Ok(sigops);
+    }
+} // new
+  //new
 
 pub trait ScriptHashInput {
     fn redeem_script(&self) -> Result<Option<bitcoin::ScriptBuf>, script::Error>;

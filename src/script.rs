@@ -422,6 +422,7 @@ impl ScriptSigOps for bitcoin::Script {
                             sigops +=
                                 (prev_opcode.to_u8() - opcodes::OP_PUSHNUM_1.to_u8() + 1) as usize;
                         } else {
+                            println!("Sigops + 20!");
                             sigops += MAX_PUBKEYS_PER_MULTISIG;
                         }
                     }

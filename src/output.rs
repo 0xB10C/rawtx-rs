@@ -2,9 +2,9 @@
 
 use std::fmt;
 
+use crate::script::Multisig;
+use crate::script::ScriptSigOps;
 use bitcoin::{blockdata::opcodes::all as opcodes, script, Amount, TxOut};
-
-use crate::script::{Multisig, ScriptSigOps};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct OutputInfo {
@@ -258,6 +258,7 @@ impl OutputTypeDetection for TxOut {
 
 pub trait OutputSigops {
     fn sigops(&self) -> Result<usize, script::Error>;
+    fn sigopsnew(&self) -> Result<usize, script::Error>;
 }
 
 impl OutputSigops for TxOut {
@@ -270,12 +271,24 @@ impl OutputSigops for TxOut {
         }
 
         if self.is_p2ms() {
+            assert_eq!("nononoo", "this is p2ms");
             return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.sigops(true)?);
         }
 
         return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.sigops(false)?);
     }
-}
+
+    fn sigopsnew(&self) -> Result<usize, script::Error> {
+        const SIGOPS_SCALE_FACTOR: usize = 4;
+        // in P2TR scripts, no sigops are counted
+        if self.is_p2tr() {
+            return Ok(0);
+        }
+        // new
+        // for example, for P2MS script_pubkeys (OP_CHECKMUTLISIG)
+        return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.count_sigops_legacy());
+    }
+} //new
 
 #[cfg(test)]
 mod tests {
