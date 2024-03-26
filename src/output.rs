@@ -291,6 +291,17 @@ mod tests {
         assert!(out0.is_p2ms());
         assert_eq!(out0.get_type(), OutputType::P2ms);
     }
+    
+    #[test]
+    fn output_type_detection_p2ms2() {
+        // mainnet d5a02fd4d7e3cf5ca02d2a4c02c8124ba00907eb85801dddfe984428714e3946
+        let raw_tx = hex::decode("010000000150db0324e3733b7d4915a42acf51d4cd95629fb5a659da68d01292e3152abf7d010000006b4830450221008c24014a99a87736aa47a773d738cbbcd60dadfbb2aa294d4f00cda1e4dae66f022076fa9be5d50eecd2e8e1dbe364b158f2d5df049cbcd8cc759970dd23fab41423012102dc6546ba58b9bc26365357a428516d48c9bbc230dd6fc72912654aaad460ef19ffffffff02781e00000000000069512102d7f69a1fc373a72468ae84634d9949fdeab4d1c903c6f23a3465f79c889342a421028836687b0c942c94801ce11b2601cbb1e900e6544ef28369e69977195794d47b2102dc6546ba58b9bc26365357a428516d48c9bbc230dd6fc72912654aaad460ef1953ae3c660d00000000001976a914e4e9d188d9806fef75904225f370009aa4103a9d88ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
+        let out0 = &tx.output[0];
+        assert!(out0.is_p2ms());
+        assert_eq!(out0.get_type(), OutputType::P2ms);
+    }
+
 
     #[test]
     fn output_type_detection_p2tr() {

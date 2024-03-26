@@ -509,11 +509,11 @@ impl Multisig for bitcoin::Script {
             return Ok(None);
         }
 
-        // check that the instructions between OP_PUSHNUM_N and OP_PUSHNUM_M are
-        // public keys
+        // check that at least one of the instructions between OP_PUSHNUM_N and OP_PUSHNUM_M
+        // is a public key
         if !instructions[1..instructions.len() - 2]
             .iter()
-            .all(|inst| inst.is_ecdsa_pubkey())
+            .any(|inst| inst.is_ecdsa_pubkey())
         {
             return Ok(None);
         }
@@ -543,6 +543,16 @@ mod tests {
         assert_eq!(
             redeem_script_ms_2of2.get_opcheckmultisig_n_m(),
             Ok(Some((2, 2)))
+        )
+    }
+    
+    #[test]
+    fn multisig_opcheckmultisig_1of3() {
+        // from mainnet d5a02fd4d7e3cf5ca02d2a4c02c8124ba00907eb85801dddfe984428714e3946 input 0
+        let p2ms_output_1of3 = ScriptBuf::from_hex("512102d7f69a1fc373a72468ae84634d9949fdeab4d1c903c6f23a3465f79c889342a421028836687b0c942c94801ce11b2601cbb1e900e6544ef28369e69977195794d47b2102dc6546ba58b9bc26365357a428516d48c9bbc230dd6fc72912654aaad460ef1953ae").unwrap();
+        assert_eq!(
+            p2ms_output_1of3.get_opcheckmultisig_n_m(),
+            Ok(Some((1, 3)))
         )
     }
 
