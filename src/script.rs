@@ -509,11 +509,13 @@ impl Multisig for bitcoin::Script {
             return Ok(None);
         }
 
-        // check that at least one of the instructions between OP_PUSHNUM_N and OP_PUSHNUM_M
-        // is a public key
+        
+        // Normally, the instructions between OP_PUSHNUM_N and OP_PUSHNUM_M should be public keys.
+        // However, these data pushes are sometimes used to store arbitraity data in P2MS output.
+        // They are still multisig n-of-m's.
         if !instructions[1..instructions.len() - 2]
             .iter()
-            .any(|inst| inst.is_ecdsa_pubkey())
+            .any(|inst| inst.push_bytes().is_some())
         {
             return Ok(None);
         }
@@ -548,8 +550,18 @@ mod tests {
     
     #[test]
     fn multisig_opcheckmultisig_1of3() {
-        // from mainnet d5a02fd4d7e3cf5ca02d2a4c02c8124ba00907eb85801dddfe984428714e3946 input 0
+        // from mainnet d5a02fd4d7e3cf5ca02d2a4c02c8124ba00907eb85801dddfe984428714e3946 output 0
         let p2ms_output_1of3 = ScriptBuf::from_hex("512102d7f69a1fc373a72468ae84634d9949fdeab4d1c903c6f23a3465f79c889342a421028836687b0c942c94801ce11b2601cbb1e900e6544ef28369e69977195794d47b2102dc6546ba58b9bc26365357a428516d48c9bbc230dd6fc72912654aaad460ef1953ae").unwrap();
+        assert_eq!(
+            p2ms_output_1of3.get_opcheckmultisig_n_m(),
+            Ok(Some((1, 3)))
+        )
+    }
+    
+    #[test]
+    fn multisig_opcheckmultisig_1of3_2() {
+        // from mainnet 6e45ba2e4f71497291170c40e7161fb47675ff0a7d6c67c1fda485832ed7c923 output 1
+        let p2ms_output_1of3 = ScriptBuf::from_hex("5121027f86d68a007dc5c214c67f964350136c69fa5c783f70b9e7e13935b3f4a1c60e21032e6d71977d2685a41eecdfc260c2463903bef6cc83eaaa77555d90ea7ba09e7a2103030303030303030303030303030303030303030303030303030303030303030353ae").unwrap();
         assert_eq!(
             p2ms_output_1of3.get_opcheckmultisig_n_m(),
             Ok(Some((1, 3)))
