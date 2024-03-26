@@ -457,7 +457,7 @@ mod tests {
         for (sigops, rawtx) in tx_sigops_pairs.iter() {
             let tx: Transaction =
                 bitcoin::consensus::deserialize(&hex::decode(rawtx).unwrap()).unwrap();
-            assert_eq!(*sigops, tx.sigops().unwrap());
+            assert_eq!(*sigops, tx.sigopsnew().unwrap());
         }
     }
 

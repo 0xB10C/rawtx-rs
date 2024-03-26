@@ -271,7 +271,6 @@ impl OutputSigops for TxOut {
         }
 
         if self.is_p2ms() {
-            assert_eq!("nononoo", "this is p2ms");
             return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.sigops(true)?);
         }
 
