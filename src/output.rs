@@ -288,7 +288,7 @@ mod tests {
         assert!(out0.is_p2ms());
         assert_eq!(out0.get_type(), OutputType::P2ms);
     }
-    
+
     #[test]
     fn output_type_detection_p2ms2() {
         // mainnet d5a02fd4d7e3cf5ca02d2a4c02c8124ba00907eb85801dddfe984428714e3946
@@ -298,7 +298,6 @@ mod tests {
         assert!(out0.is_p2ms());
         assert_eq!(out0.get_type(), OutputType::P2ms);
     }
-
 
     #[test]
     fn output_type_detection_p2tr() {
