@@ -706,27 +706,21 @@ impl InputTypeDetection for TxIn {
     /// A coinbase has a an Outpoint with an all zero txid and an output index
     /// of 0xffffffff. The witness is empty.
     fn is_coinbase(&self) -> bool {
-        if self.has_witness()
-            || self.previous_output.vout != 0xffffffff
-            || !self.previous_output.is_null()
-        {
-            return false;
-        }
-        true
+        !self.has_witness()
+            && self.previous_output.vout == 0xffffffff
+            && self.previous_output.is_null()
     }
 
-    /// Checks if an input is a coinbase with witness data. // TODO: since when are these to be expected?
+    /// Checks if an input is a coinbase with witness data. On mainnet, this
+    /// input type is expected after SegWit activation at height 481824
+    /// (24 August 2017).
     ///
     /// A coinbase has a an Outpoint with an all zero txid and an output index
     /// of 0xffffffff. The witness is not empty.
     fn is_coinbase_witness(&self) -> bool {
-        if !self.has_witness()
-            || self.previous_output.vout != 0xffffffff
-            || !self.previous_output.is_null()
-        {
-            return false;
-        }
-        true
+        self.has_witness()
+            && self.previous_output.vout == 0xffffffff
+            && self.previous_output.is_null()
     }
 }
 
