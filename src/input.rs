@@ -368,7 +368,12 @@ impl fmt::Display for InputType {
 impl InputTypeDetection for TxIn {
     fn get_type(&self) -> Result<InputType, script::Error> {
         if self.has_witness() {
-            if self.is_nested_p2wpkh() {
+            // check for coinbase_wittness first as coinbases can have weird
+            // input scripts which might cause an EarlyEndOfScript error in the
+            // other checks.
+            if self.is_coinbase_witness() {
+                return Ok(InputType::CoinbaseWitness);
+            } else if self.is_nested_p2wpkh() {
                 return Ok(InputType::P2shP2wpkh);
             } else if self.is_p2wpkh() {
                 return Ok(InputType::P2wpkh);
@@ -380,9 +385,11 @@ impl InputTypeDetection for TxIn {
                 return Ok(InputType::P2trkp);
             } else if self.is_p2trsp() {
                 return Ok(InputType::P2trsp);
-            } else if self.is_coinbase_witness() {
-                return Ok(InputType::CoinbaseWitness);
             }
+        // check for coinbase first as coinbases can have weird input scripts
+        // which might cause an EarlyEndOfScript error in the other checks.
+        } else if self.is_coinbase() {
+            return Ok(InputType::Coinbase);
         } else if self.is_p2pkh(/* strict DER. */ true)? {
             return Ok(InputType::P2pkh);
         } else if self.is_p2pkh(/* strict DER. */ false)? {
@@ -397,8 +404,6 @@ impl InputTypeDetection for TxIn {
             return Ok(InputType::P2ms);
         } else if self.is_p2ms(/* strict DER. */ false)? {
             return Ok(InputType::P2msLaxDer);
-        } else if self.is_coinbase() {
-            return Ok(InputType::Coinbase);
         }
         Ok(InputType::Unknown)
     }
@@ -917,6 +922,18 @@ mod tests {
     fn coinbase_input_detection() {
         // mainnet b39fa6c39b99683ac8f456721b270786c627ecb246700888315991877024b983 coinbase @ 300000
         let rawtx = hex::decode("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4803e09304062f503253482f0403c86d53087ceca141295a00002e522cfabe6d6d7561cf262313da1144026c8f7a43e3899c44f6145f39a36507d36679a8b7006104000000000000000000000001c8704095000000001976a91480ad90d403581fa3bf46086a91b2d9d4125db6c188ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let in0 = &tx.input[0];
+        assert!(in0.is_coinbase());
+        assert_eq!(in0.get_type().unwrap(), InputType::Coinbase);
+    }
+
+    #[test]
+    fn coinbase_input_detection2() {
+        // mainnet 636339fdd992c5e0382e70523af25ef969c15c4d1697d293037079c72e3c87d4 coinbase @ 361582
+        // This is one of many coinbase transactions that would error with
+        // EarlyEndOfScript before.
+        let rawtx = hex::decode("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff11036e8405045583b024acec8dee00000efbffffffff01553d3b95000000001976a914ca6ecc7d4d671d8c5c964a48dbb0bc194407a30688ac00000000").unwrap();
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let in0 = &tx.input[0];
         assert!(in0.is_coinbase());
