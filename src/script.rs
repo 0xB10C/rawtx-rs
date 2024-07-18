@@ -4,6 +4,7 @@ use crate::input::{InputType, InputTypeDetection, ScriptHashInput};
 use crate::output::{OutputType, OutputTypeDetection};
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
+use bitcoin::script::Instruction;
 use bitcoin::secp256k1::{ecdsa, schnorr};
 //use bitcoin::secp256k1;
 use std::convert::TryInto;
@@ -636,12 +637,8 @@ impl PubKeyInfo {
             OutputType::P2ms => {
                 // There can be up to three ECDSA public keys in P2MS outputs
                 for instruction in instructions_as_vec(&output.script_pubkey)?.iter() {
-                    match instruction {
-                        script::Instruction::PushBytes(bytes) => {
-                            pubkey_infos
-                                .push(PubKeyInfo::from_u8_slice_ecdsa(bytes.as_bytes()).unwrap());
-                        }
-                        script::Instruction::Op(_) => (),
+                    if let Some(pk_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                        pubkey_infos.push(pk_info);
                     }
                 }
             }
@@ -666,7 +663,7 @@ impl PubKeyInfo {
 #[cfg(test)]
 mod tests {
     use super::Multisig;
-    use crate::script::PubkeyType;
+    use crate::script::{PubkeyType, PublicKey};
     use crate::{input::InputInfo, output::OutputInfo, script::PubKeyInfo};
     use bitcoin::{ScriptBuf, Transaction};
 
@@ -749,6 +746,20 @@ mod tests {
                     vec![], // OP_RETURN
                 ],
             },
+
+            TestCase{
+                // signet 9becb93a15ab4b47eaca85c852d4309f82a28677a0a557df3c0fa6b82ef9293d
+                // inputs: P2WPKH; outputs: 1-of-3 P2MS (2x uncompressed, not-on-curve 'pubkeys' and a compressed pk), P2PKH
+                rawtx: hex::decode("01000000000101cd49818bb48793b0f5a2445517f64665805dd934d5bb5fe3f2443db18c3f63450000000000ffffffff02a00f000000000000a95141044a6572656d6961682032390d0a0d0a313120466f722049206b6e6f77207468652074686f756768747320746861742049207468696e6b20746f7761726420796f4104752c20736169746820746865204c6f72642c2074686f7567687473206f662070656163652c20616e64206e6f74206f66206576696c2c20746f206769766520792103c0e0bf0bbcdc53be9542359aeb1dde7c6289743b7b3460c12e2d57a478c6e48953aef7300f00000000001976a9148c51ed42f050b1bde974fb6649e25b782d168f4088ac0247304402206b41bae6dcec9129276d3df71e7d1f1f41097b338111a8932e034ca8747fdfaa0220447ab24f6d8f66fc0cc5a8a8c61928b63469bb28d6f51b7fc55f987509c57460012103c0e0bf0bbcdc53be9542359aeb1dde7c6289743b7b3460c12e2d57a478c6e48900000000").unwrap(),
+                pkinfos_input: vec![
+                    vec![PubKeyInfo { compressed: true, pubkey_type: PubkeyType::ECDSA }], // P2WPKH
+                ],
+                pkinfos_output: vec![
+                    vec![PubKeyInfo { compressed: true, pubkey_type: PubkeyType::ECDSA }], // P2MS (the two uncompressed pubkeys aren't on the curve..)
+                    vec![], // P2PKH
+                ],
+            },
+
         ];
 
         for testcase in testcases {
@@ -765,6 +776,41 @@ mod tests {
                 println!("--  info: {:?}\n\n", output_info);
                 assert_eq!(output_info.pubkey_stats, expected);
             }
+        }
+    }
+
+    #[test]
+    fn test_is_ecdsa_pubkey() {
+        struct Testcase {
+            raw: Vec<u8>,
+            expected: bool,
+        }
+
+        let testcases = vec![
+            Testcase { // not on curve (PK in P2MS output of signet 9becb93a15ab4b47eaca85c852d4309f82a28677a0a557df3c0fa6b82ef9293d)
+                raw: hex::decode("044a6572656d6961682032390d0a0d0a313120466f722049206b6e6f77207468652074686f756768747320746861742049207468696e6b20746f7761726420796f").unwrap(),
+                expected: false,
+            },
+            Testcase { // not on curve (PK in P2MS output of signet 9becb93a15ab4b47eaca85c852d4309f82a28677a0a557df3c0fa6b82ef9293d)
+                raw: hex::decode("04752c20736169746820746865204c6f72642c2074686f7567687473206f662070656163652c20616e64206e6f74206f66206576696c2c20746f20676976652079").unwrap(),
+                expected: false,
+            },
+            Testcase { // (PK in P2MS output of signet 9becb93a15ab4b47eaca85c852d4309f82a28677a0a557df3c0fa6b82ef9293d)
+                raw: hex::decode("03c0e0bf0bbcdc53be9542359aeb1dde7c6289743b7b3460c12e2d57a478c6e489").unwrap(),
+                expected: true,
+            },
+            Testcase { // Hal Finney's pubkey from f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16
+                raw: hex::decode("04ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84c").unwrap(),
+                expected: true,
+            },
+            Testcase { // Satoshis pubkey from f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16
+                raw: hex::decode("0411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3").unwrap(),
+                expected: true,
+            },
+        ];
+
+        for testcase in testcases {
+            assert_eq!(testcase.raw.is_pubkey(), testcase.expected);
         }
     }
 
