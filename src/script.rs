@@ -4,7 +4,6 @@ use crate::input::{InputType, InputTypeDetection, ScriptHashInput};
 use crate::output::{OutputType, OutputTypeDetection};
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
-use bitcoin::script::Instruction;
 use bitcoin::secp256k1::{ecdsa, schnorr};
 //use bitcoin::secp256k1;
 use std::convert::TryInto;
