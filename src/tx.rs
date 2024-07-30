@@ -2,7 +2,6 @@
 
 use crate::{input, output};
 use bitcoin::blockdata::locktime::absolute::LockTime;
-use bitcoin::blockdata::script as bitcoin_script;
 use bitcoin::hash_types::Txid;
 use bitcoin::hashes::Hash;
 use bitcoin::script;
@@ -10,6 +9,7 @@ use bitcoin::{Amount, Transaction, TxIn, TxOut};
 use input::{InputInfo, InputSigops};
 use output::{OutputInfo, OutputSigops};
 use std::collections::HashMap;
+use std::{error, fmt};
 
 #[cfg(feature = "counterparty")]
 use crate::input::ScriptHashInput;
@@ -21,6 +21,45 @@ use crate::script::{instructions_as_vec, Multisig};
 use bitcoin::blockdata::script::Instruction;
 #[cfg(feature = "counterparty")]
 use rc4::{consts::U32, Key, KeyInit, Rc4, StreamCipher};
+
+#[derive(Clone, Debug)]
+pub enum TxInfoError {
+    Input(input::InputError),
+    Output(output::OutputError),
+    SigOps(script::Error),
+}
+
+impl fmt::Display for TxInfoError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TxInfoError::Input(e) => write!(f, "Transaction input error: {}", e),
+            TxInfoError::Output(e) => write!(f, "Transaction output error: {}", e),
+            TxInfoError::SigOps(e) => write!(f, "Transaction sigops error: {}", e),
+        }
+    }
+}
+
+impl error::Error for TxInfoError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match *self {
+            TxInfoError::Input(ref e) => Some(e),
+            TxInfoError::Output(ref e) => Some(e),
+            TxInfoError::SigOps(ref e) => Some(e),
+        }
+    }
+}
+
+impl From<input::InputError> for TxInfoError {
+    fn from(e: input::InputError) -> Self {
+        TxInfoError::Input(e)
+    }
+}
+
+impl From<output::OutputError> for TxInfoError {
+    fn from(e: output::OutputError) -> Self {
+        TxInfoError::Output(e)
+    }
+}
 
 #[derive(Debug)]
 pub struct TxInfo {
@@ -42,8 +81,8 @@ pub struct TxInfo {
 
 impl TxInfo {
     /// Creates an new [TxInfo] from a [Transaction].
-    /// Can return an [bitcoin::blockdata::script::Error] if script in the transaction can't be parsed.
-    pub fn new(tx: &Transaction) -> Result<TxInfo, bitcoin_script::Error> {
+    /// Can return a TxInfoError if the transaction and it's scripts can't be parsed.
+    pub fn new(tx: &Transaction) -> Result<TxInfo, TxInfoError> {
         let payments = if tx.output.len() > 1 {
             tx.output.len() as u32
         } else {
@@ -211,17 +250,17 @@ impl TxInfo {
     }
 }
 pub trait TransactionSigops {
-    fn sigops(&self) -> Result<usize, script::Error>;
+    fn sigops(&self) -> Result<usize, TxInfoError>;
 }
 
 impl TransactionSigops for Transaction {
-    fn sigops(&self) -> Result<usize, script::Error> {
+    fn sigops(&self) -> Result<usize, TxInfoError> {
         let mut sigops: usize = 0;
         for input in self.input.iter() {
             sigops += input.sigops()?
         }
         for output in self.output.iter() {
-            sigops += output.sigops()?
+            sigops += output.sigops()
         }
         return Ok(sigops);
     }

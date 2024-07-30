@@ -4,7 +4,7 @@ use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
 use bitcoin::script::Instruction;
 use bitcoin::{Sequence, TxIn};
-use std::fmt;
+use std::{error, fmt};
 
 use crate::script::{
     instructions_as_vec, Multisig, PubKeyInfo, PublicKey, Signature, SignatureInfo,
@@ -14,6 +14,52 @@ pub const TAPROOT_ANNEX_INDICATOR: u8 = 0x50;
 pub const TAPROOT_LEAF_TAPSCRIPT: u8 = 0xc0;
 pub const TAPROOT_LEAF_MASK: u8 = 0xfe;
 pub const ORDINALS_INSCRIPTION_MARKER: [u8; 3] = [0x6f, 0x72, 0x64]; // ASCII "ord"
+
+#[derive(Clone, Debug)]
+pub enum InputError {
+    TypeInfo(script::Error),
+    MultisigInfo(script::Error),
+    SignatureInfo(script::Error),
+    PubkeyInfo(script::Error),
+    SigOpsInfo(script::Error),
+    ScriptHashInfo(script::Error),
+}
+
+impl fmt::Display for InputError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            InputError::TypeInfo(e) => write!(f, "Could not determine type of input: {}", e),
+            InputError::MultisigInfo(e) => {
+                write!(f, "Could not extract multisig infos from input: {}", e)
+            }
+            InputError::SignatureInfo(e) => {
+                write!(f, "Could not extract signature infos from input: {}", e)
+            }
+            InputError::PubkeyInfo(e) => {
+                write!(f, "Could not extract pubkey infos from input: {}", e)
+            }
+            InputError::SigOpsInfo(e) => {
+                write!(f, "Could not extract sigops infos from input: {}", e)
+            }
+            InputError::ScriptHashInfo(e) => {
+                write!(f, "Could not extract sighash infos from input: {}", e)
+            }
+        }
+    }
+}
+
+impl error::Error for InputError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match *self {
+            InputError::TypeInfo(ref e) => Some(e),
+            InputError::MultisigInfo(ref e) => Some(e),
+            InputError::SignatureInfo(ref e) => Some(e),
+            InputError::PubkeyInfo(ref e) => Some(e),
+            InputError::SigOpsInfo(ref e) => Some(e),
+            InputError::ScriptHashInfo(ref e) => Some(e),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct InputInfo {
@@ -27,7 +73,7 @@ pub struct InputInfo {
 }
 
 impl InputInfo {
-    pub fn new(input: &TxIn) -> Result<InputInfo, script::Error> {
+    pub fn new(input: &TxIn) -> Result<InputInfo, InputError> {
         Ok(InputInfo {
             sequence: input.sequence,
             in_type: input.get_type()?,
@@ -163,13 +209,13 @@ pub struct MultisigInputInfo {
 }
 
 pub trait InputMultisigDetection {
-    fn multisig_info(&self) -> Result<Option<MultisigInputInfo>, script::Error>;
+    fn multisig_info(&self) -> Result<Option<MultisigInputInfo>, InputError>;
 }
 
 impl InputMultisigDetection for TxIn {
     /// Returns Some([MultisigInputInfo]) when the input detectably spends a
     /// multisig, If the multisig spend is not detected, None() is returned.
-    fn multisig_info(&self) -> Result<Option<MultisigInputInfo>, script::Error> {
+    fn multisig_info(&self) -> Result<Option<MultisigInputInfo>, InputError> {
         if self.is_scripthash_input()? {
             if let Ok(Some(redeemscript)) = self.redeem_script() {
                 if let Ok(Some(multisig)) = redeemscript.get_opcheckmultisig_n_m() {
@@ -195,11 +241,11 @@ impl InputMultisigDetection for TxIn {
 }
 
 pub trait InputSigops {
-    fn sigops(&self) -> Result<usize, script::Error>;
+    fn sigops(&self) -> Result<usize, InputError>;
 }
 
 impl InputSigops for TxIn {
-    fn sigops(&self) -> Result<usize, script::Error> {
+    fn sigops(&self) -> Result<usize, InputError> {
         const SIGOPS_SCALE_FACTOR: usize = 4;
         let mut sigops: usize = 0;
 
@@ -236,13 +282,13 @@ impl InputSigops for TxIn {
 }
 
 pub trait ScriptHashInput {
-    fn redeem_script(&self) -> Result<Option<bitcoin::ScriptBuf>, script::Error>;
+    fn redeem_script(&self) -> Result<Option<bitcoin::ScriptBuf>, InputError>;
 }
 
 impl ScriptHashInput for TxIn {
     /// Returns the redeem script of the input. The caller must make sure the
     /// input is script hash based, otherwise None is returned.
-    fn redeem_script(&self) -> Result<Option<bitcoin::ScriptBuf>, script::Error> {
+    fn redeem_script(&self) -> Result<Option<bitcoin::ScriptBuf>, InputError> {
         if !self.is_scripthash_input()? {
             return Ok(None);
         }
@@ -250,8 +296,12 @@ impl ScriptHashInput for TxIn {
         match self.get_type()? {
             InputType::P2sh => {
                 // redeem script is the last element of the script sig
-                if let Some(instruction) = self.script_sig.instructions().last() {
-                    if let script::Instruction::PushBytes(push_bytes) = instruction? {
+                if let Some(instruction_result) = self.script_sig.instructions().last() {
+                    let instruction = match instruction_result {
+                        Ok(ins) => ins,
+                        Err(e) => return Err(InputError::ScriptHashInfo(e)),
+                    };
+                    if let script::Instruction::PushBytes(push_bytes) = instruction {
                         return Ok(Some(bitcoin::ScriptBuf::from(
                             push_bytes.as_bytes().to_vec(),
                         )));
@@ -284,16 +334,16 @@ pub trait PubkeyInput {
 }
 
 pub trait InputTypeDetection {
-    fn get_type(&self) -> Result<InputType, script::Error>;
+    fn get_type(&self) -> Result<InputType, InputError>;
     fn has_witness(&self) -> bool;
 
-    fn is_scripthash_input(&self) -> Result<bool, script::Error>;
+    fn is_scripthash_input(&self) -> Result<bool, InputError>;
 
     // detection:
-    fn is_p2ms(&self, strict_der_sig: bool) -> Result<bool, script::Error>;
-    fn is_p2pk(&self, strict_der_sig: bool) -> Result<bool, script::Error>;
-    fn is_p2pkh(&self, strict_der_sig: bool) -> Result<bool, script::Error>;
-    fn is_p2sh(&self) -> Result<bool, script::Error>;
+    fn is_p2ms(&self, strict_der_sig: bool) -> Result<bool, InputError>;
+    fn is_p2pk(&self, strict_der_sig: bool) -> Result<bool, InputError>;
+    fn is_p2pkh(&self, strict_der_sig: bool) -> Result<bool, InputError>;
+    fn is_p2sh(&self) -> Result<bool, InputError>;
     fn is_nested_p2wpkh(&self) -> bool;
     fn is_nested_p2wsh(&self) -> bool;
     fn is_p2wpkh(&self) -> bool;
@@ -370,7 +420,7 @@ impl fmt::Display for InputType {
 }
 
 impl InputTypeDetection for TxIn {
-    fn get_type(&self) -> Result<InputType, script::Error> {
+    fn get_type(&self) -> Result<InputType, InputError> {
         if self.has_witness() {
             // check for coinbase_wittness first as coinbases can have weird
             // input scripts which might cause an EarlyEndOfScript error in the
@@ -418,7 +468,7 @@ impl InputTypeDetection for TxIn {
     }
 
     /// Indicates if the input is script hash based.
-    fn is_scripthash_input(&self) -> Result<bool, script::Error> {
+    fn is_scripthash_input(&self) -> Result<bool, InputError> {
         match self.get_type()? {
             InputType::P2sh | InputType::P2shP2wsh | InputType::P2wsh => Ok(true),
             _ => Ok(false),
@@ -441,12 +491,15 @@ impl InputTypeDetection for TxIn {
     /// # Errors
     ///
     /// Returns a [`script::Error`] if the script_sig can't be parsed.
-    fn is_p2pk(&self, strict_der_sig: bool) -> Result<bool, script::Error> {
+    fn is_p2pk(&self, strict_der_sig: bool) -> Result<bool, InputError> {
         if self.has_witness() || self.script_sig.is_empty() {
             return Ok(false);
         }
 
-        let instructions = crate::script::instructions_as_vec(&self.script_sig)?;
+        let instructions = match crate::script::instructions_as_vec(&self.script_sig) {
+            Ok(ins) => ins,
+            Err(e) => return Err(InputError::TypeInfo(e)),
+        };
         if instructions.len() != 1 || !instructions[0].is_ecdsa_signature(strict_der_sig) {
             return Ok(false);
         }
@@ -467,12 +520,15 @@ impl InputTypeDetection for TxIn {
     /// It doesn't have a witness.
     /// `script_sig: [ OP_0 <ECDSA Signature> (<ECDSA Signature>) (<ECDSA Signature>) ]`
     /// `witness: [ ]`
-    fn is_p2ms(&self, strict_der_sig: bool) -> Result<bool, script::Error> {
+    fn is_p2ms(&self, strict_der_sig: bool) -> Result<bool, InputError> {
         if self.has_witness() {
             return Ok(false);
         }
 
-        let instructions = crate::script::instructions_as_vec(&self.script_sig)?;
+        let instructions = match crate::script::instructions_as_vec(&self.script_sig) {
+            Ok(ins) => ins,
+            Err(e) => return Err(InputError::TypeInfo(e)),
+        };
 
         if instructions.len() < 2 || instructions.len() > 4 {
             return Ok(false);
@@ -520,12 +576,15 @@ impl InputTypeDetection for TxIn {
     /// # Errors
     ///
     /// Returns a [`script::Error`] if the script_sig can't be parsed.
-    fn is_p2pkh(&self, strict_der_sig: bool) -> Result<bool, script::Error> {
+    fn is_p2pkh(&self, strict_der_sig: bool) -> Result<bool, InputError> {
         if self.has_witness() {
             return Ok(false);
         }
 
-        let instructions = crate::script::instructions_as_vec(&self.script_sig)?;
+        let instructions = match crate::script::instructions_as_vec(&self.script_sig) {
+            Ok(ins) => ins,
+            Err(e) => return Err(InputError::TypeInfo(e)),
+        };
         if instructions.len() != 2
             || !instructions[0].is_ecdsa_signature(strict_der_sig)
             || !instructions[1].is_pubkey()
@@ -546,7 +605,7 @@ impl InputTypeDetection for TxIn {
     /// # Errors
     ///
     /// Returns a [`script::Error`] if the script can't be parsed.
-    fn is_p2sh(&self) -> Result<bool, script::Error> {
+    fn is_p2sh(&self) -> Result<bool, InputError> {
         if self.has_witness()
             || self.is_p2pkh(false)?
             || self.is_p2pk(false)?
@@ -892,6 +951,16 @@ mod tests {
                 unknown_n: true
             }
         );
+    }
+
+    #[test]
+    fn input_type_detection_unknown() {
+        // mainnet 0f24294a1d23efbb49c1765cf443fba7930702752aba6d765870082fe4f13cae
+        let rawtx = hex::decode("0100000003d4dfa41ffe9825af0aad023f084b4dd4a599d6cb8d083e58e3a53e8ad682a6ae010000000401030103ffffffffe2274e1294e1708f344e7cd5156648750bc60d3bf3705130cdcba66675e3439b010000000401030103fffffffff41d101368d124c5b10bf130bceece07623d87767a2c950a35d1b7b6217a2329000000000401030103ffffffff0170032d00000000001976a91429c9743283afd76eed5811788b20b23f9eece00788ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let in0 = &tx.input[0];
+        assert!(in0.is_p2sh().unwrap());
+        assert_eq!(in0.get_type().unwrap(), InputType::P2sh);
     }
 
     #[test]
