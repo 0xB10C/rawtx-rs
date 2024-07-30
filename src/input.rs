@@ -978,4 +978,14 @@ mod tests {
         assert!(in0.is_coinbase_witness());
         assert_eq!(in0.get_type().unwrap(), InputType::CoinbaseWitness);
     }
+
+    #[test]
+    fn non_der_sig_p2pkh_input_detection() {
+        // mainnet fb0a1d8d34fa5537e461ac384bac761125e1bfa7fec286fa72511240fa66864d
+        let rawtx = hex::decode("01000000012316aac445c13ff31af5f3d1e2cebcada83e54ba10d15e01f49ec28bddc285aa000000008e4b3048022200002b83d59c1d23c08efd82ee0662fec23309c3adbcbd1f0b8695378db4b14e736602220000334a96676e58b1bb01784cb7c556dd8ce1c220171904da22e18fe1e7d1510db5014104d0fe07ff74c9ef5b00fed1104fad43ecf72dbab9e60733e4f56eacf24b20cf3b8cd945bcabcc73ba0158bf9ce769d43e94bd58c5c7e331a188922b3fe9ca1f5affffffff01c0c62d00000000001976a9147a2a3b481ca80c4ba7939c54d9278e50189d94f988ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let in0 = &tx.input[0];
+        assert!(in0.is_p2pkh(false).unwrap());
+        assert_eq!(in0.get_type().unwrap(), InputType::P2pkhLaxDer);
+    }
 }
