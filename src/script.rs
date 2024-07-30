@@ -1,7 +1,7 @@
 //! Information about Bitcoin PubKeys, Signatures and MultiSig constructs.
 
-use crate::input::{InputType, InputTypeDetection, ScriptHashInput};
-use crate::output::{OutputType, OutputTypeDetection};
+use crate::input::{InputError, InputType, InputTypeDetection, ScriptHashInput};
+use crate::output::{OutputError, OutputType, OutputTypeDetection};
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
 use bitcoin::secp256k1::{ecdsa, schnorr};
@@ -315,7 +315,7 @@ impl SignatureInfo {
     /// Constructs a vector of SignatureInfo for all Signatures in the input. If
     /// the inputs script_sig and witness don't contain any signatures, an empty
     /// vector is returned.
-    pub fn all_from(input: &bitcoin::TxIn) -> Result<Vec<SignatureInfo>, script::Error> {
+    pub fn all_from(input: &bitcoin::TxIn) -> Result<Vec<SignatureInfo>, InputError> {
         let input_type = input.get_type()?;
 
         let mut signature_infos = vec![];
@@ -335,7 +335,11 @@ impl SignatureInfo {
             InputType::P2ms | InputType::P2msLaxDer => {
                 // a P2MS script_sig contains up to three signatures after an
                 // initial OP_FALSE.
-                for instruction in instructions_as_vec(&input.script_sig)?[1..].iter() {
+                let instructions = match instructions_as_vec(&input.script_sig) {
+                    Ok(ins) => ins,
+                    Err(e) => return Err(InputError::PubkeyInfo(e)),
+                };
+                for instruction in instructions[1..].iter() {
                     signature_infos
                         .push(SignatureInfo::from_instruction_ecdsa(instruction).unwrap());
                 }
@@ -343,12 +347,12 @@ impl SignatureInfo {
             InputType::P2pkh | InputType::P2pkhLaxDer => {
                 // P2PKH inputs have a signature as the first element of the
                 // script_sig.
-                signature_infos.push(
-                    SignatureInfo::from_instruction_ecdsa(
-                        &instructions_as_vec(&input.script_sig)?[0],
-                    )
-                    .unwrap(),
-                );
+                let instructions = match instructions_as_vec(&input.script_sig) {
+                    Ok(ins) => ins,
+                    Err(e) => return Err(InputError::PubkeyInfo(e)),
+                };
+                signature_infos
+                    .push(SignatureInfo::from_instruction_ecdsa(&instructions[0]).unwrap());
             }
             InputType::P2shP2wpkh => {
                 // P2SH wrapped P2WPKH inputs contain the signature as the
@@ -366,7 +370,10 @@ impl SignatureInfo {
                 // P2SH inputs can contain zero or multiple signatures in
                 // the script sig. It's very uncommon that signatures are placed
                 // in the redeem script.
-                let instructions = instructions_as_vec(&input.script_sig)?;
+                let instructions = match instructions_as_vec(&input.script_sig) {
+                    Ok(ins) => ins,
+                    Err(e) => return Err(InputError::PubkeyInfo(e)),
+                };
                 for instruction in instructions[..instructions.len() - 1].iter() {
                     if let Some(signature_info) = SignatureInfo::from_instruction_ecdsa(instruction)
                     {
@@ -516,6 +523,10 @@ impl Multisig for bitcoin::Script {
     }
 }
 
+pub enum PubkeyError {
+    Script(script::Error),
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum PubkeyType {
     ECDSA,
@@ -550,7 +561,7 @@ impl PubKeyInfo {
         None
     }
 
-    pub fn from_input(input: &bitcoin::TxIn) -> Result<Vec<PubKeyInfo>, script::Error> {
+    pub fn from_input(input: &bitcoin::TxIn) -> Result<Vec<PubKeyInfo>, InputError> {
         let input_type = input.get_type()?;
 
         let mut pubkey_infos = vec![];
@@ -563,10 +574,10 @@ impl PubKeyInfo {
             InputType::P2ms | InputType::P2msLaxDer => (),
             InputType::P2pkh | InputType::P2pkhLaxDer => {
                 // P2PKH inputs have a signature as the first element and a public key as the second element of the script_sig.
-                pubkey_infos.push(
-                    PubKeyInfo::from_instruction_ecdsa(&instructions_as_vec(&input.script_sig)?[1])
-                        .unwrap(),
-                );
+                // If we can't parse the the script, we assume there are no pubkeys in there..
+                if let Ok(instructions) = instructions_as_vec(&input.script_sig) {
+                    pubkey_infos.push(PubKeyInfo::from_instruction_ecdsa(&instructions[1]).unwrap());
+                }
             }
             InputType::P2shP2wpkh => {
                 // P2SH wrapped P2WPKH inputs contain the signature as the first and
@@ -583,10 +594,12 @@ impl PubKeyInfo {
             InputType::P2sh => {
                 // P2SH inputs usually contain public keys in the witness redeem script
                 if let Some(redeem_script) = input.redeem_script().unwrap() {
-                    let instructions = instructions_as_vec(&redeem_script)?;
-                    for instruction in instructions.iter() {
-                        if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
-                            pubkey_infos.push(pubkey_info);
+                    // If we can't parse the the script, we assume there are no pubkeys in there..
+                    if let Ok(instructions) = instructions_as_vec(&redeem_script) {
+                        for instruction in instructions.iter() {
+                            if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                                pubkey_infos.push(pubkey_info);
+                            }
                         }
                     }
                 }
@@ -594,10 +607,12 @@ impl PubKeyInfo {
             InputType::P2shP2wsh => {
                 // P2SH wrapped P2WSH inputs usually contain public keys in the witness redeem script
                 if let Some(redeem_script) = input.redeem_script().unwrap() {
-                    let instructions = instructions_as_vec(&redeem_script)?;
-                    for instruction in instructions.iter() {
-                        if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
-                            pubkey_infos.push(pubkey_info);
+                    // If we can't parse the the script, we assume there are no pubkeys in there..
+                    if let Ok(instructions) = instructions_as_vec(&redeem_script) {
+                        for instruction in instructions.iter() {
+                            if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                                pubkey_infos.push(pubkey_info);
+                            }
                         }
                     }
                 }
@@ -605,10 +620,12 @@ impl PubKeyInfo {
             InputType::P2wsh => {
                 // P2WSH inputs usually contain public keys in the witness redeem script
                 if let Some(redeem_script) = input.redeem_script().unwrap() {
-                    let instructions = instructions_as_vec(&redeem_script)?;
-                    for instruction in instructions.iter() {
-                        if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
-                            pubkey_infos.push(pubkey_info);
+                    // If we can't parse the the script, we assume there are no pubkeys in there..
+                    if let Ok(instructions) = instructions_as_vec(&redeem_script) {
+                        for instruction in instructions.iter() {
+                            if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                                pubkey_infos.push(pubkey_info);
+                            }
                         }
                     }
                 }
@@ -628,22 +645,28 @@ impl PubKeyInfo {
         Ok(pubkey_infos)
     }
 
-    pub fn from_output(output: &bitcoin::TxOut) -> Result<Vec<PubKeyInfo>, script::Error> {
+    pub fn from_output(output: &bitcoin::TxOut) -> Result<Vec<PubKeyInfo>, OutputError> {
         let output_type = output.get_type();
 
         let mut pubkey_infos = vec![];
 
         match output_type {
             OutputType::P2pk => {
-                if let Some(pk_info) = PubKeyInfo::from_instruction_ecdsa(
-                    &instructions_as_vec(&output.script_pubkey)?[0],
-                ) {
+                let instructions = match instructions_as_vec(&output.script_pubkey) {
+                    Ok(ins) => ins,
+                    Err(e) => return Err(OutputError::PubkeyInfo(e)),
+                };
+                if let Some(pk_info) = PubKeyInfo::from_instruction_ecdsa(&instructions[0]) {
                     pubkey_infos.push(pk_info);
                 }
             }
             OutputType::P2ms => {
                 // There can be up to three ECDSA public keys in P2MS outputs
-                for instruction in instructions_as_vec(&output.script_pubkey)?.iter() {
+                let instructions = match instructions_as_vec(&output.script_pubkey) {
+                    Ok(ins) => ins,
+                    Err(e) => return Err(OutputError::PubkeyInfo(e)),
+                };
+                for instruction in instructions.iter() {
                     if let Some(pk_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
                         pubkey_infos.push(pk_info);
                     }

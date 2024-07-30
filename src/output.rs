@@ -1,10 +1,33 @@
 //! Information about Bitcoin transaction outputs.
 
-use std::fmt;
+use std::{error, fmt};
 
 use bitcoin::{blockdata::opcodes::all as opcodes, script, Amount, TxOut};
 
 use crate::script::{Multisig, PubKeyInfo};
+
+#[derive(Debug, Clone)]
+pub enum OutputError {
+    PubkeyInfo(script::Error),
+}
+
+impl fmt::Display for OutputError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            OutputError::PubkeyInfo(e) => {
+                write!(f, "Could not extract pubkey infos from input: {}", e)
+            }
+        }
+    }
+}
+
+impl error::Error for OutputError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match *self {
+            OutputError::PubkeyInfo(ref e) => Some(e),
+        }
+    }
+}
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct OutputInfo {
@@ -14,7 +37,7 @@ pub struct OutputInfo {
 }
 
 impl OutputInfo {
-    pub fn new(output: &TxOut) -> Result<OutputInfo, script::Error> {
+    pub fn new(output: &TxOut) -> Result<OutputInfo, OutputError> {
         Ok(OutputInfo {
             out_type: output.get_type(),
             value: Amount::from_sat(output.value.to_sat()),
@@ -259,20 +282,20 @@ impl OutputTypeDetection for TxOut {
 }
 
 pub trait OutputSigops {
-    fn sigops(&self) -> Result<usize, script::Error>;
+    fn sigops(&self) -> usize;
 }
 
 impl OutputSigops for TxOut {
-    fn sigops(&self) -> Result<usize, script::Error> {
+    fn sigops(&self) -> usize {
         const SIGOPS_SCALE_FACTOR: usize = 4;
 
         // in P2TR scripts, no sigops are counted
         if self.is_p2tr() {
-            return Ok(0);
+            return 0;
         }
 
         // for example, for P2MS script_pubkeys (OP_CHECKMUTLISIG)
-        return Ok(SIGOPS_SCALE_FACTOR * self.script_pubkey.count_sigops_legacy());
+        SIGOPS_SCALE_FACTOR * self.script_pubkey.count_sigops_legacy()
     }
 }
 
