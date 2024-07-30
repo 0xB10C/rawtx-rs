@@ -17,6 +17,11 @@ const LOW_R_THRESHOLD: [u8; 32] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
+const ECDSA_SIG_MIN_LEN: usize = 9;
+// Longest I've seen on mainnet.
+const ECDSA_SIG_MAX_LAX_DER_LEN: usize = 123;
+const ECDSA_SIG_MAX_STRICT_DER_LEN: usize = 73;
+
 // Helper function collecting the Instructions iterator into a
 // `Vec<script::Instruction>` for easier handling.
 pub fn instructions_as_vec(
@@ -133,7 +138,10 @@ impl Signature for [u8] {
 
 impl Signature for Vec<u8> {
     fn is_ecdsa_signature(&self, strict_der: bool) -> bool {
-        if self.len() < 9 || self.len() > 73 {
+        if self.len() < ECDSA_SIG_MIN_LEN
+            || ((strict_der && self.len() > ECDSA_SIG_MAX_STRICT_DER_LEN)
+                || self.len() > ECDSA_SIG_MAX_LAX_DER_LEN)
+        {
             false
         } else {
             let sighash_stripped = &self[..self.len() - 1];
@@ -250,7 +258,7 @@ impl SignatureInfo {
     /// Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
     /// otherwise None is returned.
     pub fn from_u8_slice_ecdsa(bytes: &[u8]) -> Option<SignatureInfo> {
-        if bytes.len() < 9 || bytes.len() > 73 {
+        if bytes.len() < ECDSA_SIG_MIN_LEN || bytes.len() > ECDSA_SIG_MAX_LAX_DER_LEN {
             return None;
         }
 
@@ -1005,12 +1013,30 @@ mod tests {
                 low_r: false,
                 der_encoded: true,
             },
+            // Input 0 of fb0a1d8d34fa5537e461ac384bac761125e1bfa7fec286fa72511240fa66864d
+            SignatureInfoTestcase {
+                sig: "3048022200002b83d59c1d23c08efd82ee0662fec23309c3adbcbd1f0b8695378db4b14e736602220000334a96676e58b1bb01784cb7c556dd8ce1c220171904da22e18fe1e7d1510db501".to_string(),
+                length: 75,
+                sighash: 0x01,
+                low_s: true,
+                low_r: true,
+                der_encoded: false,
+            },
+            // Input 0 of 23befff6eea3dded0e34574af65c266c9398e7d7d9d07022bf1cd526c5cdbc94 
+            SignatureInfoTestcase {
+                sig: "304502210099d6f5897eec6f2c4aeb3ccb43dc19f45f4a43372fd68a9e835bec463159e6620220365d554d87d656907af6a9c98768900c7e8cfbd3352d108c48d383cd6b08f6a02a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a01".to_string(),
+                length: 123,
+                sighash: 0x01,
+                low_s: true,
+                low_r: false,
+                der_encoded: false,
+            },
         ];
 
         for testcase in testcases.iter() {
             println!("test signature: {}", testcase.sig);
             let s = ScriptBuf::from_hex(&testcase.sig).unwrap().into_bytes();
-            assert!(s.is_ecdsa_signature(false));
+            assert!(s.is_ecdsa_signature(testcase.der_encoded));
             assert!(!s.is_schnorr_signature());
             let si = SignatureInfo::from_u8_slice_ecdsa(&s).unwrap();
 
