@@ -1,6 +1,6 @@
 [package]
 name = "rawtx-rs"
-version = "0.1.11"
+version = "0.1.12"
 authors = ["0xB10C <0xb10c@gmail.com>"]
 edition = "2018"
 description = "Makes information about Bitcoin transactions accessible."
