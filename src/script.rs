@@ -5,7 +5,6 @@ use crate::output::{OutputError, OutputType, OutputTypeDetection};
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
 use bitcoin::secp256k1::{ecdsa, schnorr};
-//use bitcoin::secp256k1;
 use std::convert::TryInto;
 
 const SECP256K1_HALF_CURVE_ORDER: [u8; 32] = [
@@ -146,9 +145,9 @@ impl Signature for Vec<u8> {
         } else {
             let sighash_stripped = &self[..self.len() - 1];
             if strict_der {
-                secp256k1::Signature::from_der(sighash_stripped).is_ok()
+                ecdsa::Signature::from_der(sighash_stripped).is_ok()
             } else {
-                secp256k1::Signature::from_der_lax(sighash_stripped).is_ok()
+                ecdsa::Signature::from_der_lax(sighash_stripped).is_ok()
             }
         }
     }
