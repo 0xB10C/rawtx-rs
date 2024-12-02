@@ -100,7 +100,7 @@ impl TxInfo {
         }
 
         Ok(TxInfo {
-            txid: tx.txid(),
+            txid: tx.compute_txid(),
             version: tx.version.0,
             payments,
             vsize: tx.vsize() as u64,
