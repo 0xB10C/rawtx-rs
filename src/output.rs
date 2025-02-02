@@ -61,6 +61,7 @@ pub enum OutputType {
     P2wshV0,
     OpReturn(OpReturnFlavor),
     P2tr,
+    P2a,
     Unknown,
 }
 
@@ -102,6 +103,7 @@ impl fmt::Display for OutputType {
             OutputType::P2wshV0 => write!(f, "P2WSH v0"),
             OutputType::OpReturn(flavor) => write!(f, "{}", flavor),
             OutputType::P2tr => write!(f, "P2TR"),
+            OutputType::P2a => write!(f, "P2A"),
             OutputType::Unknown => write!(f, "UNKNOWN"),
         }
     }
@@ -112,6 +114,7 @@ pub trait OutputTypeDetection {
 
     fn is_p2ms(&self) -> bool;
     fn is_p2tr(&self) -> bool;
+    fn is_p2a(&self) -> bool;
 
     // OP_RETURN flavor detection
     fn is_witness_commitment(&self) -> bool;
@@ -132,6 +135,8 @@ impl OutputTypeDetection for TxOut {
             OutputType::P2wshV0
         } else if self.is_p2tr() {
             OutputType::P2tr
+        } else if self.is_p2a() {
+            OutputType::P2a
         } else if self.script_pubkey.is_op_return() {
             if self.is_witness_commitment() {
                 return OutputType::OpReturn(OpReturnFlavor::WitnessCommitment);
@@ -186,6 +191,19 @@ impl OutputTypeDetection for TxOut {
             return true;
         }
         false
+    }
+
+    /// Checks if an output pays to a P2A script.
+    ///
+    /// A P2A output pushes the witness version 1 followed by the 2 bytes hex-encoded as 4e73
+    /// `script_pubkey: [ OP_PUSHNUM_1  <4e73> ]`
+    fn is_p2a(&self) -> bool {
+        let script_pubkey_bytes = self.script_pubkey.as_bytes();
+        return script_pubkey_bytes.len() == 4
+            && script_pubkey_bytes[0] == opcodes::OP_PUSHNUM_1.to_u8()
+            && script_pubkey_bytes[1] == opcodes::OP_PUSHBYTES_2.to_u8()
+            && script_pubkey_bytes[2] == 78u8
+            && script_pubkey_bytes[3] == 115u8;
     }
 
     /// Checks if an output is a OP_RETURN output meeting the requirements for an wittness commitment
@@ -375,5 +393,18 @@ mod tests {
             out2.get_type(),
             OutputType::OpReturn(OpReturnFlavor::StacksBlockCommit)
         );
+    }
+
+    #[test]
+    fn output_type_detection_p2a() {
+        // mainnet 4752bdfc1041b46fb49cb551d35d06233bcb71ee3b6e7df9cb765db881f8104f
+        let rawtx = hex::decode("020000000001016352fb25843f7e3e20ac70119a9e46447d24257e0a250215402da5449764610f0100000000fdffffff02d0070000000000000451024e73581b00000000000022512044b35747ac9a995294839fdbefa823ae2d0cfbed950b72755499d9039ae739b501400cb9cb49f7790080d9601d1c24bebfd0668ef170145888f303f487ab5a9c4acdb511274f7b305faef35718af80c108df5ac51538f71f450ecda63c8fa952365200000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let out0 = &tx.output[0];
+        let out1 = &tx.output[1];
+        assert!(out0.is_p2a());
+        assert!(out1.is_p2tr());
+        assert_eq!(out0.get_type(), OutputType::P2a);
+        assert_eq!(out1.get_type(), OutputType::P2tr);
     }
 }
