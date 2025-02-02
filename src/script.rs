@@ -418,6 +418,7 @@ impl SignatureInfo {
             }
             // exhaustive so the compiler warns us if we forget to add an input
             // type here.
+            InputType::P2a => (),
             InputType::Unknown => (),
             InputType::Coinbase => (),
             InputType::CoinbaseWitness => (),
@@ -636,6 +637,7 @@ impl PubKeyInfo {
             InputType::P2trsp => (),
             // exhaustive so the compiler warns us if we forget to add an input
             // type here.
+            InputType::P2a => (),
             InputType::Unknown => (),
             InputType::Coinbase => (),
             InputType::CoinbaseWitness => (),
@@ -681,6 +683,7 @@ impl PubKeyInfo {
             | OutputType::P2wpkhV0
             | OutputType::P2wshV0
             | OutputType::P2sh
+            | OutputType::P2a
             | OutputType::OpReturn(_)
             | OutputType::Unknown => (),
         }

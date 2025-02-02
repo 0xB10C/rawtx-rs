@@ -91,7 +91,8 @@ impl InputInfo {
             | InputType::P2wpkh
             | InputType::P2wsh
             | InputType::P2trkp
-            | InputType::P2trsp => true,
+            | InputType::P2trsp
+            | InputType::P2a => true,
             InputType::P2ms
             | InputType::P2msLaxDer
             | InputType::P2pk
@@ -121,6 +122,7 @@ impl InputInfo {
             | InputType::P2shP2wsh
             | InputType::P2wpkh
             | InputType::P2wsh
+            | InputType::P2a
             | InputType::Coinbase
             | InputType::CoinbaseWitness => false,
         }
@@ -141,16 +143,21 @@ impl InputInfo {
             | InputType::P2trkp
             | InputType::P2trsp
             | InputType::P2sh
+            | InputType::P2a
             | InputType::Coinbase
             | InputType::Unknown
             | InputType::CoinbaseWitness => false,
         }
     }
 
-    /// Returns true if the input spends either a native P2WPKH or a native P2WSH input
+    /// Returns true if the input spends either a native P2WPKH, a native P2WSH, a P2TR or P2A input
     pub fn is_spending_native_segwit(&self) -> bool {
         match self.in_type {
-            InputType::P2wpkh | InputType::P2wsh | InputType::P2trkp | InputType::P2trsp => true,
+            InputType::P2wpkh
+            | InputType::P2wsh
+            | InputType::P2trkp
+            | InputType::P2trsp
+            | InputType::P2a => true,
             InputType::P2pk
             | InputType::P2pkLaxDer
             | InputType::P2pkh
@@ -183,6 +190,7 @@ impl InputInfo {
             | InputType::P2trsp
             | InputType::P2shP2wpkh
             | InputType::P2shP2wsh
+            | InputType::P2a
             | InputType::Coinbase
             | InputType::CoinbaseWitness => false,
         }
@@ -249,8 +257,12 @@ impl InputSigops for TxIn {
         const SIGOPS_SCALE_FACTOR: usize = 4;
         let mut sigops: usize = 0;
 
-        // in P2TR scripts and coinbase inputs, no sigops are counted
-        if self.is_p2trkp() || self.is_p2trsp() || self.is_coinbase() || self.is_coinbase_witness()
+        // in P2TR and P2A scripts and coinbase inputs, no sigops are counted
+        if self.is_p2a()
+            || self.is_p2trkp()
+            || self.is_p2trsp()
+            || self.is_coinbase()
+            || self.is_coinbase_witness()
         {
             return Ok(0);
         }
@@ -350,6 +362,7 @@ pub trait InputTypeDetection {
     fn is_p2wsh(&self) -> bool;
     fn is_p2trkp(&self) -> bool;
     fn is_p2trsp(&self) -> bool;
+    fn is_p2a(&self) -> bool;
     fn is_coinbase(&self) -> bool;
     fn is_coinbase_witness(&self) -> bool;
 }
@@ -388,6 +401,8 @@ pub enum InputType {
     P2trkp,
     /// Pay-to-Taproot script path input
     P2trsp,
+    /// Pay-to-Anchor input
+    P2a,
     /// Coinbase transaction input
     Coinbase,
     /// Coinbase transaction input with a witness
@@ -412,6 +427,7 @@ impl fmt::Display for InputType {
             InputType::P2wsh => write!(f, "P2WSH"),
             InputType::P2trkp => write!(f, "P2TR key-path"),
             InputType::P2trsp => write!(f, "P2TR script-path"),
+            InputType::P2a => write!(f, "P2A"),
             InputType::Coinbase => write!(f, "Coinbase"),
             InputType::CoinbaseWitness => write!(f, "Coinbase with Witness"),
             InputType::Unknown => write!(f, "UNKNOWN"),
@@ -458,6 +474,8 @@ impl InputTypeDetection for TxIn {
             return Ok(InputType::P2ms);
         } else if self.is_p2ms(/* strict DER. */ false)? {
             return Ok(InputType::P2msLaxDer);
+        } else if self.is_p2a() {
+            return Ok(InputType::P2a);
         }
         Ok(InputType::Unknown)
     }
@@ -769,6 +787,13 @@ impl InputTypeDetection for TxIn {
         false
     }
 
+    /// Checks if an input spends a P2A output.
+    ///
+    /// A P2A output has an empty script_sig and an empty witness.
+    fn is_p2a(&self) -> bool {
+        return self.script_sig.is_empty() && !self.has_witness();
+    }
+
     /// Checks if an input is a coinbase without witness data.
     ///
     /// A coinbase has a an Outpoint with an all zero txid and an output index
@@ -1034,6 +1059,19 @@ mod tests {
         assert!(in0.is_p2trsp());
         assert_eq!(in0.get_type().unwrap(), InputType::P2trsp);
         assert!(InputInfo::new(in0).unwrap().is_spending_taproot());
+        assert!(InputInfo::new(in0).unwrap().is_spending_segwit());
+        assert!(!in0.reveals_inscription().unwrap());
+    }
+
+    #[test]
+    fn p2a_input_detection() {
+        // mainnet d7da3b5ae755793ff486896e82553d841043df393f09593ec38b807dd2959c45
+        let rawtx = hex::decode("020000000113c59a9590b576fbe82677888d9cea0639ffe077c6b42fb3599d3ad37cc6ef730000000000ffffffff010000000000000000056a032e2e2e00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let in0 = &tx.input[0];
+        assert!(in0.is_p2a());
+        assert_eq!(in0.get_type().unwrap(), InputType::P2a);
+        assert!(!InputInfo::new(in0).unwrap().is_spending_taproot());
         assert!(InputInfo::new(in0).unwrap().is_spending_segwit());
         assert!(!in0.reveals_inscription().unwrap());
     }
