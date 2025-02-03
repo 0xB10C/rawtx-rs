@@ -791,7 +791,7 @@ impl InputTypeDetection for TxIn {
     ///
     /// A P2A output has an empty script_sig and an empty witness.
     fn is_p2a(&self) -> bool {
-        return self.script_sig.is_empty() && !self.has_witness();
+        self.script_sig.is_empty() && !self.has_witness()
     }
 
     /// Checks if an input is a coinbase without witness data.

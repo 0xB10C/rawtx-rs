@@ -199,11 +199,11 @@ impl OutputTypeDetection for TxOut {
     /// `script_pubkey: [ OP_PUSHNUM_1  <4e73> ]`
     fn is_p2a(&self) -> bool {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
-        return script_pubkey_bytes.len() == 4
+        script_pubkey_bytes.len() == 4
             && script_pubkey_bytes[0] == opcodes::OP_PUSHNUM_1.to_u8()
             && script_pubkey_bytes[1] == opcodes::OP_PUSHBYTES_2.to_u8()
-            && script_pubkey_bytes[2] == 78u8
-            && script_pubkey_bytes[3] == 115u8;
+            && script_pubkey_bytes[2] == 0x4eu8
+            && script_pubkey_bytes[3] == 0x73u8
     }
 
     /// Checks if an output is a OP_RETURN output meeting the requirements for an wittness commitment
