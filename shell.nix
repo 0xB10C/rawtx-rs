@@ -3,6 +3,7 @@
 pkgs.mkShell {
   hardeningDisable = [ "stackprotector" "fortify" ];
     nativeBuildInputs = [
+      pkgs.clippy
       pkgs.cargo
       pkgs.rustfmt
       pkgs.rustc
