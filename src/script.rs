@@ -191,39 +191,30 @@ pub struct SignatureInfo {
 
 impl SignatureInfo {
     pub fn low_s(&self) -> bool {
-        let compact: [u8; 64];
-        match self.signature {
-            SignatureType::Ecdsa(s) => {
-                compact = s.serialize_compact();
-            }
-            SignatureType::Schnorr(s) => {
-                compact = *s.as_ref();
-            }
-        }
+        let compact: [u8; 64] = match self.signature {
+            SignatureType::Ecdsa(s) => s.serialize_compact(),
+            SignatureType::Schnorr(s) => *s.as_ref(),
+        };
+
         let (_, s) = compact.split_at(32);
         let s: [u8; 32] = s
             .try_into()
             .expect("Splitting a 64 byte array in half should procude two 32 byte arrays.");
 
-        return s <= SECP256K1_HALF_CURVE_ORDER;
+        s <= SECP256K1_HALF_CURVE_ORDER
     }
 
     pub fn low_r(&self) -> bool {
-        let compact: [u8; 64];
-        match self.signature {
-            SignatureType::Ecdsa(s) => {
-                compact = s.serialize_compact();
-            }
-            SignatureType::Schnorr(s) => {
-                compact = *s.as_ref();
-            }
-        }
+        let compact: [u8; 64] = match self.signature {
+            SignatureType::Ecdsa(s) => s.serialize_compact(),
+            SignatureType::Schnorr(s) => *s.as_ref(),
+        };
         let (r, _) = compact.split_at(32);
         let r: [u8; 32] = r
             .try_into()
             .expect("Splitting a 64 byte array in half should procude two 32 byte arrays.");
 
-        return r < LOW_R_THRESHOLD;
+        r < LOW_R_THRESHOLD
     }
 
     /// Returns Some(SignatureInfo) if the Instruction is a Bitcoin ECDSA Signature,
@@ -286,20 +277,19 @@ impl SignatureInfo {
     pub fn from_u8_slice_schnorr(bytes: &[u8]) -> Option<SignatureInfo> {
         if bytes.to_vec().is_schnorr_signature() {
             let sighash: u8;
-            let signature: schnorr::Signature;
-            if bytes.len() == 64 {
+            let signature: schnorr::Signature = if bytes.len() == 64 {
                 sighash = 0x01u8;
-                signature = match schnorr::Signature::from_slice(bytes) {
+                match schnorr::Signature::from_slice(bytes) {
                     Ok(sig) => sig,
                     Err(_) => return None,
                 }
             } else {
                 sighash = *bytes.last().unwrap();
-                signature = match schnorr::Signature::from_slice(&bytes[..bytes.len() - 1]) {
+                match schnorr::Signature::from_slice(&bytes[..bytes.len() - 1]) {
                     Ok(sig) => sig,
                     Err(_) => return None,
                 }
-            }
+            };
 
             return Some(SignatureInfo {
                 signature: SignatureType::Schnorr(signature),
@@ -576,7 +566,8 @@ impl PubKeyInfo {
                 // P2PKH inputs have a signature as the first element and a public key as the second element of the script_sig.
                 // If we can't parse the the script, we assume there are no pubkeys in there..
                 if let Ok(instructions) = instructions_as_vec(&input.script_sig) {
-                    pubkey_infos.push(PubKeyInfo::from_instruction_ecdsa(&instructions[1]).unwrap());
+                    pubkey_infos
+                        .push(PubKeyInfo::from_instruction_ecdsa(&instructions[1]).unwrap());
                 }
             }
             InputType::P2shP2wpkh => {
@@ -597,7 +588,9 @@ impl PubKeyInfo {
                     // If we can't parse the the script, we assume there are no pubkeys in there..
                     if let Ok(instructions) = instructions_as_vec(&redeem_script) {
                         for instruction in instructions.iter() {
-                            if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                            if let Some(pubkey_info) =
+                                PubKeyInfo::from_instruction_ecdsa(instruction)
+                            {
                                 pubkey_infos.push(pubkey_info);
                             }
                         }
@@ -610,7 +603,9 @@ impl PubKeyInfo {
                     // If we can't parse the the script, we assume there are no pubkeys in there..
                     if let Ok(instructions) = instructions_as_vec(&redeem_script) {
                         for instruction in instructions.iter() {
-                            if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                            if let Some(pubkey_info) =
+                                PubKeyInfo::from_instruction_ecdsa(instruction)
+                            {
                                 pubkey_infos.push(pubkey_info);
                             }
                         }
@@ -623,7 +618,9 @@ impl PubKeyInfo {
                     // If we can't parse the the script, we assume there are no pubkeys in there..
                     if let Ok(instructions) = instructions_as_vec(&redeem_script) {
                         for instruction in instructions.iter() {
-                            if let Some(pubkey_info) = PubKeyInfo::from_instruction_ecdsa(instruction) {
+                            if let Some(pubkey_info) =
+                                PubKeyInfo::from_instruction_ecdsa(instruction)
+                            {
                                 pubkey_infos.push(pubkey_info);
                             }
                         }
@@ -1047,7 +1044,7 @@ mod tests {
                 low_r: true,
                 der_encoded: false,
             },
-            // Input 0 of 23befff6eea3dded0e34574af65c266c9398e7d7d9d07022bf1cd526c5cdbc94 
+            // Input 0 of 23befff6eea3dded0e34574af65c266c9398e7d7d9d07022bf1cd526c5cdbc94
             SignatureInfoTestcase {
                 sig: "304502210099d6f5897eec6f2c4aeb3ccb43dc19f45f4a43372fd68a9e835bec463159e6620220365d554d87d656907af6a9c98768900c7e8cfbd3352d108c48d383cd6b08f6a02a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a01".to_string(),
                 length: 123,

@@ -75,6 +75,8 @@ pub struct TxInfo {
     pub input_infos: Vec<InputInfo>,
     /// Information about the transaction outputs.
     pub output_infos: Vec<OutputInfo>,
+    // is_coinbase struct field is not yet used.
+    #[allow(dead_code)]
     is_coinbase: bool,
     is_bip69_compliant: bool,
 }
@@ -104,7 +106,7 @@ impl TxInfo {
             version: tx.version.0,
             payments,
             vsize: tx.vsize() as u64,
-            weight: tx.weight().to_wu() as u64,
+            weight: tx.weight().to_wu(),
             is_coinbase: tx.is_coinbase(),
             is_bip69_compliant: is_bip69_compliant(&tx.input, &tx.output),
             locktime: tx.lock_time,
@@ -163,8 +165,8 @@ impl TxInfo {
         let mut legacy = false;
         let mut segwit = false;
         for i in self.input_infos.iter() {
-            legacy = legacy | i.is_spending_legacy();
-            segwit = segwit | i.is_spending_segwit();
+            legacy |= i.is_spending_legacy();
+            segwit |= i.is_spending_segwit();
             if legacy && segwit {
                 return true;
             }
@@ -217,7 +219,7 @@ impl TxInfo {
             }
 
             // a third of the outputs must have an equal-output-value
-            let max_count = *a.iter().map(|(_, size)| size).max().unwrap();
+            let max_count = *a.values().max().unwrap();
             if max_count >= self.output_infos.len() / 3 && max_count > 2 {
                 return true;
             }
@@ -262,14 +264,13 @@ impl TransactionSigops for Transaction {
         for output in self.output.iter() {
             sigops += output.sigops()
         }
-        return Ok(sigops);
+        Ok(sigops)
     }
 }
 
 fn is_bip69_compliant(inputs: &[TxIn], outputs: &[TxOut]) -> bool {
-    let inputs_sorted: bool;
-    if inputs.len() == 1 {
-        inputs_sorted = true;
+    let inputs_sorted = if inputs.len() == 1 {
+        true
     } else {
         let mut to_be_sorted_inputs = inputs.to_vec();
         to_be_sorted_inputs.sort_by(|a, b| {
@@ -283,12 +284,11 @@ fn is_bip69_compliant(inputs: &[TxIn], outputs: &[TxOut]) -> bool {
                 .then_with(|| a.previous_output.vout.cmp(&b.previous_output.vout))
         });
 
-        inputs_sorted = inputs.to_vec() == to_be_sorted_inputs;
-    }
+        inputs.to_vec() == to_be_sorted_inputs
+    };
 
-    let outputs_sorted: bool;
-    if outputs.len() == 1 {
-        outputs_sorted = true;
+    let outputs_sorted = if outputs.len() == 1 {
+        true
     } else {
         let mut to_be_sorted_outputs = outputs.to_vec();
         to_be_sorted_outputs.sort_by(|a, b| {
@@ -296,8 +296,8 @@ fn is_bip69_compliant(inputs: &[TxIn], outputs: &[TxOut]) -> bool {
                 .cmp(&b.value)
                 .then_with(|| a.script_pubkey.cmp(&b.script_pubkey))
         });
-        outputs_sorted = outputs.to_vec() == to_be_sorted_outputs;
-    }
+        outputs.to_vec() == to_be_sorted_outputs
+    };
     inputs_sorted && outputs_sorted
 }
 
@@ -483,7 +483,7 @@ mod tests {
             (5, "02000000000101b557ad25033e2e7323d1ea26035bd8d84c0529a8d23c6d243002fb4d277d5ba10100000017160014d28e1be3503020526295715f41b4c9e0d291c5b90100000001c0d40100000000001976a914ea9911ef55b869720c76846bba0babf6f2748db388ac02483045022100c586d4e2ff16a8354fd4fbadcdfc1dc66782c66ba83f7be87e7692e90cc5105e0220759f96d12dce5acd7eb515a312ec9112b8a9eb8b220ef120d5f34ed35465b2e30121030955dbd8b34862058e6edaef080243cdd1b0b907d626990c1f404614d40be18700000000"),
             // coinbase with two P2PKH outputs (from F2Pool; splitting uncommon ordinals)
             (8, "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff6403ac9b0c2cfabe6d6d654b01255ebb409c165395395b3f3c2301f032f53df45cba5ed5d266dc2c786010000000f09f909f092f4632506f6f6c2f7300000000000000000000000000000000000000000000000000000000000000000000000500ae970800000000000422020000000000001976a914c6740a12d0a7d556f89782bf5faf0e12cf25a63988ac1ebc4025000000001976a914c825a1ecf2a6830c4401620c3a16f1995057c2ab88ac00000000000000002f6a2d434f524501a21cbd3caa4fe89bccd1d716c92ce4533e4d4733bdb2a04b4ccf74792cc6753c27c5fd5f1d6458bf00000000000000002c6a4c2952534b424c4f434b3acd2e3ba1354794d09aabccd650c2155ae16cd9830cc9b0d57aecd423005ba3a64940a53f"),
-            // failed the input check with EarlyEndOfScript, as we didn't skip the sigops counting for witness coinbase scripts 
+            // failed the input check with EarlyEndOfScript, as we didn't skip the sigops counting for witness coinbase scripts
             (0, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff5803ad9b0c1b4d696e656420627920416e74506f6f6c3936312900e50185de0c73fabe6d6d4045cd649213cd20a5b9fbc8e8d110413043505dd479aa610953d960b83bc22e10000000000000000000ca8d0370000000000000ffffffff05220200000000000017a91442402a28dd61f2718a4b27ae72a4791d5bbdade787821dea280000000017a9144b09d828dfc8baaba5d04ee77397e04b1050cc73870000000000000000266a24aa21a9ed7d3074d041ce338acb516547585351a0d058c476cf2b91141fa94db4096d3aea00000000000000002f6a2d434f524501a37cf4faa0758b26dca666f3e36d42fa15cc01065997be5a09d05bb9bac27ec60419d0b373f32b2000000000000000002b6a2952534b424c4f434b3a6b102098d342b6868cb55909ae57bec35e74ded30cc9b0d57aecd423005ba3ab0120000000000000000000000000000000000000000000000000000000000000000000000000"),
             // failed the output check with EarlyEndOfScript, as we failed on outputs pushing past the end
             (0, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff2f0363740c0474d64e652f7a7a616d78632f76649b3c094f135bf4b83108c14ea85f1226746ff200b4020000ffffffffffffffff03a1defc2900000000160014b6f3cfc20084e3b9f0d12b0e6f9da8fcbcf5a2d90000000000000000266a24aa21a9ed22e7492ea82d70262d12e74db7b7813d93365a2bf528aa803b191a209272a65f00000000000000002cfabe6d6d14c8eef25658e2e29cf3580d3c0cfe6cf5ece1bfba5949e1b44de824cc5c4be7010000000000000001200000000000000000000000000000000000000000000000000000000000000000a1233f55"),

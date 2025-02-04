@@ -78,8 +78,8 @@ impl InputInfo {
             sequence: input.sequence,
             in_type: input.get_type()?,
             multisig_info: input.multisig_info()?,
-            signature_info: SignatureInfo::all_from(&input)?,
-            pubkey_stats: PubKeyInfo::from_input(&input)?,
+            signature_info: SignatureInfo::all_from(input)?,
+            pubkey_stats: PubKeyInfo::from_input(input)?,
         })
     }
 
@@ -289,7 +289,7 @@ impl InputSigops for TxIn {
             _ => (),
         };
 
-        return Ok(sigops);
+        Ok(sigops)
     }
 }
 
@@ -831,14 +831,8 @@ impl InputInscriptionDetection for TxIn {
             if let Ok(instructions) = instructions_as_vec(tapscript) {
                 let mut instruction_iter = instructions.iter();
                 while let Some(instruction) = instruction_iter.next() {
-                    if matches!(instruction, Instruction::PushBytes(bytes) if bytes.is_empty()) {
-                        if matches!(instruction_iter.next(), Some(Instruction::Op(op)) if op == &opcodes::OP_IF)
-                        {
-                            if matches!(instruction_iter.next(), Some(Instruction::PushBytes(bytes)) if bytes.as_bytes() == ORDINALS_INSCRIPTION_MARKER.to_vec())
-                            {
-                                return Ok(true);
-                            }
-                        }
+                    if matches!(instruction, Instruction::PushBytes(bytes) if bytes.is_empty()) && matches!(instruction_iter.next(), Some(Instruction::Op(op)) if op == &opcodes::OP_IF) && matches!(instruction_iter.next(), Some(Instruction::PushBytes(bytes)) if bytes.as_bytes() == ORDINALS_INSCRIPTION_MARKER.to_vec()) {
+                        return Ok(true);
                     }
                 }
             }
