@@ -831,7 +831,10 @@ impl InputInscriptionDetection for TxIn {
             if let Ok(instructions) = instructions_as_vec(tapscript) {
                 let mut instruction_iter = instructions.iter();
                 while let Some(instruction) = instruction_iter.next() {
-                    if matches!(instruction, Instruction::PushBytes(bytes) if bytes.is_empty()) && matches!(instruction_iter.next(), Some(Instruction::Op(op)) if op == &opcodes::OP_IF) && matches!(instruction_iter.next(), Some(Instruction::PushBytes(bytes)) if bytes.as_bytes() == ORDINALS_INSCRIPTION_MARKER.to_vec()) {
+                    if matches!(instruction, Instruction::PushBytes(bytes) if bytes.is_empty())
+                        && matches!(instruction_iter.next(), Some(Instruction::Op(op)) if op == &opcodes::OP_IF)
+                        && matches!(instruction_iter.next(), Some(Instruction::PushBytes(bytes)) if bytes.as_bytes() == ORDINALS_INSCRIPTION_MARKER.to_vec())
+                    {
                         return Ok(true);
                     }
                 }
