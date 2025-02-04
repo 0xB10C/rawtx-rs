@@ -264,12 +264,12 @@ impl SignatureInfo {
             return None;
         }
 
-        return Some(SignatureInfo {
+        Some(SignatureInfo {
             signature: SignatureType::Ecdsa(signature),
             sig_hash: *bytes.last().unwrap(),
             length: bytes.len(),
             was_der_encoded: !lax_der_encoded,
-        });
+        })
     }
 
     /// Returns Some(SignatureInfo) if the Instruction is a Bitcoin Schnorr Signature,
