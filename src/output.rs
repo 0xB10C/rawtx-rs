@@ -41,7 +41,7 @@ impl OutputInfo {
         Ok(OutputInfo {
             out_type: output.get_type(),
             value: Amount::from_sat(output.value.to_sat()),
-            pubkey_stats: PubKeyInfo::from_output(&output)?,
+            pubkey_stats: PubKeyInfo::from_output(output)?,
         })
     }
 
