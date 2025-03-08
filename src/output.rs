@@ -76,6 +76,7 @@ pub enum OpReturnFlavor {
     Len1Byte,
     Len20Byte,
     Len80Byte,
+    Bip47PaymentCode,
 }
 
 impl fmt::Display for OpReturnFlavor {
@@ -88,6 +89,7 @@ impl fmt::Display for OpReturnFlavor {
             OpReturnFlavor::Len1Byte => write!(f, "OP_RETURN (0 byte)"),
             OpReturnFlavor::Len20Byte => write!(f, "OP_RETURN (20 byte)"),
             OpReturnFlavor::Len80Byte => write!(f, "OP_RETURN (80 byte)"),
+            OpReturnFlavor::Bip47PaymentCode => write!(f, "OP_RETURN (BIP 47 Payment Code)"),
         }
     }
 }
@@ -122,7 +124,6 @@ pub trait OutputTypeDetection {
     fn is_opreturn_stacks_blockcommit(&self) -> bool;
     fn is_opreturn_with_len(&self, length: usize) -> bool;
     fn is_opreturn_bip47_payment_code(&self) -> bool;
-    fn is_member_secp256k1(sign_byte: u8, x_xoordinate: &[u8]) -> bool;
 }
 
 impl OutputTypeDetection for TxOut {
@@ -152,6 +153,8 @@ impl OutputTypeDetection for TxOut {
                 return OutputType::OpReturn(OpReturnFlavor::Len20Byte);
             } else if self.is_opreturn_with_len(80) {
                 return OutputType::OpReturn(OpReturnFlavor::Len80Byte);
+            } else if self.is_opreturn_bip47_payment_code() {
+                return OutputType::OpReturn(OpReturnFlavor::Bip47PaymentCode);
             }
             OutputType::OpReturn(OpReturnFlavor::Unspecified)
         } else if self.script_pubkey.is_p2pk() {
@@ -297,7 +300,10 @@ impl OutputTypeDetection for TxOut {
         }
         // Bytes 3-34 - x value, must be a member of the secp256k1 group
         let x_coordinate = &payload[3..35];
-        if !Self::is_member_secp256k1(sign_byte, x_coordinate) {
+        let mut pubkey_bytes = Vec::with_capacity(33);
+        pubkey_bytes.push(sign_byte);
+        pubkey_bytes.extend_from_slice(x_coordinate);
+        if secp256k1::PublicKey::from_slice(&pubkey_bytes).is_err() {
             return false;
         }
         // Bytes 35-66 - chain-code, must not be all zeros
@@ -311,12 +317,6 @@ impl OutputTypeDetection for TxOut {
             return false;
         }
         true
-    }
-    fn is_member_secp256k1(sign_byte: u8, x_coordinate: &[u8]) -> bool {
-        let mut pubkey_bytes = Vec::with_capacity(33);
-        pubkey_bytes.push(sign_byte);
-        pubkey_bytes.extend_from_slice(x_coordinate);
-        secp256k1::PublicKey::from_slice(&pubkey_bytes).is_ok()
     }
 
     /// Compares the data length of an OP_RETURN output with the given `data_length`. Returns
@@ -463,6 +463,8 @@ mod tests {
 
     #[test]
     fn output_type_detection_bip47_payment_code() {
+        // mainnet aa7bb5c839e6d513fdde4ef994995363f98a6d6cbe795663f432a39a38d71025
+        // output 0 contains the BIP47 payment code in its script pubkey starting as "0x6a4c500.."
         let rawtx = hex::decode("02000000000101cdd51d9048b22420cd2af3538aa7ea71951b81b4dee3894cc20f5c13fe463f783500000000fdffffff040000000000000000536a4c50010003a4b1880f11b6de85617c0aa9a21a3073dbe5a2fa277aa8f626ba9cb95b3c9c025e36a6ec791cedb876a079a264a40fa42531aa60825ca1d243998f54dd8977450000000000000000000000000022020000000000001976a914f522819122c73c04068577724e2ee7d05a0965d888ac983a00000000000016001437808929e894e2c691bd705f802c203716ea11fc9bdb00000000000016001427f5f2387d9efc49fade31556e81c30f8fa666730247304402206661b9bba8f4bf116f9a53c36de4b4ba35501f0d46a1c36a76c0e792b1c422ef02206dc75e32ec9a47068a749d0e1fee455ee483568a78387b86c8b179d293230f90012103c6c004d651ae8428b33a7ba4222bc92e4a7631f5791cb286e49fb38e89a3e662806b0b00").unwrap();
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let out0 = &tx.output[0];
