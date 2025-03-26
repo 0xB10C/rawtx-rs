@@ -175,17 +175,157 @@ pub enum SignatureType {
     Schnorr(schnorr::Signature),
 }
 
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum DEREncoding {
+    /// The signature is not meant to be DER encoded. This is the case for
+    /// e.g. Schnorr signatures.
+    NotApplicable,
+
+    /// The ECDSA signature is DER encoded.
+    Valid,
+
+    /// The ECDSA signature is too short to be DER encoded.
+    SigTooShort,
+    /// The ECDSA signature is too long to be DER encoded.
+    SigTooLong,
+    /// The ECDSA signature does not have a compound marker.
+    NoCompoundMarker,
+    /// The compound length descriptor does not match the signature length.
+    InvalidCompoundLengthDescriptor,
+    /// The ECDSA signature does not have a S-value length descriptor.
+    NoSValueLengthDescriptor,
+    /// The encoded length of the r + S-value + markers + descriptors doesn't match the signature
+    /// length.
+    DescribedLengthMismatch,
+    /// The R element marker does not indicate an integer.
+    RElementNotAnInteger,
+    /// The R element length is zero.
+    RLengthIsZero,
+    /// The R element is negative.
+    NegativeRValue,
+    /// The R element starts with a NULL byte.
+    NullByteAtRValueStart,
+    /// The S element marker does not indicate an integer.
+    SElementNotAnInteger,
+    /// The S element length is zero.
+    SLengthIsZero,
+    /// The S element is negative.
+    NegativeSValue,
+    /// The S element starts with a NULL byte.
+    NullByteAtSValueStart,
+}
+
+/// Checks if an ECDSA signature (with a sighash flag) is DER encoded.
+/// Based on https://github.com/bitcoin/bips/blob/master/bip-0066.mediawiki#der-encoding-reference
+pub fn is_strict_der_encoded_ecdsa_sig(sig: &[u8]) -> DEREncoding {
+    // Format: 0x30 [total-length] 0x02 [R-length] [R] 0x02 [S-length] [S] [sighash]
+    // * total-length: 1-byte length descriptor of everything that follows,
+    //   excluding the sighash byte.
+    // * R-length: 1-byte length descriptor of the R value that follows.
+    // * R: arbitrary-length big-endian encoded R value. It must use the shortest
+    //   possible encoding for a positive integers (which means no null bytes at
+    //   the start, except a single one when the next byte has its highest bit set).
+    // * S-length: 1-byte length descriptor of the S value that follows.
+    // * S: arbitrary-length big-endian encoded S value. The same rules apply.
+    // * sighash: 1-byte value indicating what data is hashed (not part of the DER
+    //   signature)
+
+    // Minimum and maximum size constraints.
+    if sig.len() < 9 {
+        return DEREncoding::SigTooShort;
+    }
+    if sig.len() > 73 {
+        return DEREncoding::SigTooLong;
+    }
+
+    // A signature is of type 0x30 (compound).
+    if sig[0] != 0x30 {
+        return DEREncoding::NoCompoundMarker;
+    }
+
+    // Make sure the length covers the entire signature.
+    if usize::from(sig[1]) != sig.len() - 3 {
+        return DEREncoding::InvalidCompoundLengthDescriptor;
+    }
+
+    // Extract the length of the R element.
+    let len_r: u8 = sig[3];
+
+    // Make sure the length of the S element is still inside the signature.
+    if usize::from(5 + len_r) >= sig.len() {
+        return DEREncoding::NoSValueLengthDescriptor;
+    }
+
+    // Extract the length of the S element.
+    let len_s: u8 = sig[usize::from(5 + len_r)];
+
+    // Verify that the length of the signature matches the sum of the length
+    // of the elements.
+    if usize::from(len_r + len_s + 7) != sig.len() {
+        return DEREncoding::DescribedLengthMismatch;
+    }
+
+    // Check whether the R element is an integer.
+    if sig[2] != 0x02 {
+        return DEREncoding::RElementNotAnInteger;
+    }
+
+    // Zero-length integers are not allowed for R.
+    if len_r == 0 {
+        return DEREncoding::RLengthIsZero;
+    }
+
+    // Negative numbers are not allowed for R.
+    if sig[4] & 0x80 > 0 {
+        return DEREncoding::NegativeRValue;
+    }
+
+    // Null bytes at the start of R are not allowed, unless R would
+    // otherwise be interpreted as a negative number.
+    #[allow(clippy::nonminimal_bool)]
+    if len_r > 1 && (sig[4] == 0x00) && !(sig[5] & 0x80 > 0) {
+        return DEREncoding::NullByteAtRValueStart;
+    }
+
+    // Check whether the S element is an integer.
+    if sig[usize::from(len_r + 4)] != 0x02 {
+        return DEREncoding::SElementNotAnInteger;
+    }
+
+    // Zero-length integers are not allowed for S.
+    if len_s == 0 {
+        return DEREncoding::SLengthIsZero;
+    }
+
+    // Negative numbers are not allowed for S.
+    if sig[usize::from(len_r + 6)] & 0x80 > 0 {
+        return DEREncoding::NegativeSValue;
+    }
+
+    // Null bytes at the start of R are not allowed, unless R would
+    // otherwise be interpreted as a negative number.
+    #[allow(clippy::nonminimal_bool)]
+    if len_s > 1
+        && (sig[usize::from(len_r + 6)] == 0x00)
+        && !(sig[usize::from(len_r + 7)] & 0x80 > 0)
+    {
+        return DEREncoding::NullByteAtSValueStart;
+    }
+
+    DEREncoding::Valid
+}
+
 // Contains information about a Bitcoin signature.
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct SignatureInfo {
     /// The actual signature wrapped in a type enum.
     pub signature: SignatureType,
-    /// Inidcates if a ECDSA signature was strictly DER encoded before being decoded. A
-    /// Schnorr signature was never DER encoded.
-    pub was_der_encoded: bool,
+    /// Inidcates if a ECDSA signature is strictly DER encoded. A
+    /// Schnorr signature will never be DER encoded always be [DEREncoding::NotApplicable].
+    pub der_encoded: DEREncoding,
     /// SigHash flag of the signature.
     pub sig_hash: u8,
-    /// length of the encoded signatur.e
+    /// length of the encoded signature.
     pub length: usize,
 }
 
@@ -252,24 +392,28 @@ impl SignatureInfo {
             return None;
         }
 
-        let signature: ecdsa::Signature;
         let sighash_stripped = &bytes[..bytes.len() - 1];
-        let mut lax_der_encoded = false;
         if let Ok(sig) = ecdsa::Signature::from_der(sighash_stripped) {
-            signature = sig;
-        } else if let Ok(sig) = ecdsa::Signature::from_der_lax(sighash_stripped) {
-            signature = sig;
-            lax_der_encoded = true;
-        } else {
-            return None;
+            if is_strict_der_encoded_ecdsa_sig(bytes) == DEREncoding::Valid {
+                return Some(SignatureInfo {
+                    signature: SignatureType::Ecdsa(sig),
+                    sig_hash: *bytes.last().unwrap(),
+                    length: bytes.len(),
+                    der_encoded: DEREncoding::Valid,
+                });
+            }
         }
 
-        Some(SignatureInfo {
-            signature: SignatureType::Ecdsa(signature),
-            sig_hash: *bytes.last().unwrap(),
-            length: bytes.len(),
-            was_der_encoded: !lax_der_encoded,
-        })
+        if let Ok(sig) = ecdsa::Signature::from_der_lax(sighash_stripped) {
+            return Some(SignatureInfo {
+                signature: SignatureType::Ecdsa(sig),
+                sig_hash: *bytes.last().unwrap(),
+                length: bytes.len(),
+                der_encoded: is_strict_der_encoded_ecdsa_sig(bytes),
+            });
+        }
+
+        None
     }
 
     /// Returns Some(SignatureInfo) if the Instruction is a Bitcoin Schnorr Signature,
@@ -295,7 +439,7 @@ impl SignatureInfo {
                 signature: SignatureType::Schnorr(signature),
                 sig_hash: sighash,
                 length: bytes.len(),
-                was_der_encoded: false, // awlways false for Schnorr
+                der_encoded: DEREncoding::NotApplicable,
             });
         }
         None
@@ -692,7 +836,7 @@ impl PubKeyInfo {
 #[cfg(test)]
 mod tests {
     use super::Multisig;
-    use crate::script::{PubkeyType, PublicKey};
+    use crate::script::{DEREncoding, PubkeyType, PublicKey};
     use crate::{input::InputInfo, output::OutputInfo, script::PubKeyInfo};
     use bitcoin::{ScriptBuf, Transaction};
 
@@ -923,7 +1067,7 @@ mod tests {
         pub sighash: u8,
         pub low_r: bool,
         pub low_s: bool,
-        pub der_encoded: bool,
+        pub der_encoded: DEREncoding,
     }
 
     #[test]
@@ -939,7 +1083,7 @@ mod tests {
                 sighash: 0x01,
                 low_s: true,
                 low_r: false,
-                der_encoded: false,
+                der_encoded: DEREncoding::NotApplicable,
             },
             // #0 from https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv with explicit sighash flag
             SignatureInfoTestcase {
@@ -948,7 +1092,7 @@ mod tests {
                 sighash: 0x01,
                 low_s: true,
                 low_r: false,
-                der_encoded: false,
+                der_encoded: DEREncoding::NotApplicable,
             },
             // #0 from https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv with non-default sighash flag
             SignatureInfoTestcase {
@@ -957,7 +1101,7 @@ mod tests {
                 sighash: 0x02,
                 low_s: true,
                 low_r: false,
-                der_encoded: false,
+                der_encoded: DEREncoding::NotApplicable,
             },
             // just above r-threshold (not-low r) & half curve order (-> low s)
             SignatureInfoTestcase {
@@ -966,7 +1110,7 @@ mod tests {
                 sighash: 0x01,
                 low_s: true,
                 low_r: false,
-                der_encoded: false,
+                der_encoded: DEREncoding::NotApplicable,
             },
             // just below r-threshold (low r) & half curve order + 1(-> not-low s)
             SignatureInfoTestcase {
@@ -975,7 +1119,7 @@ mod tests {
                 sighash: 0x01,
                 low_s: false,
                 low_r: true,
-                der_encoded: false,
+                der_encoded: DEREncoding::NotApplicable,
             },
         ];
 
@@ -986,7 +1130,7 @@ mod tests {
             let si = SignatureInfo::from_u8_slice_schnorr(&s).unwrap();
 
             println!("test signature: {}", testcase.sig);
-            assert_eq!(si.was_der_encoded, false); // always false for schnorr
+            assert_eq!(si.der_encoded, DEREncoding::NotApplicable);
             assert_eq!(si.length, testcase.length, "");
             assert_eq!(si.sig_hash, testcase.sighash, "sighash flag");
             assert_eq!(si.low_s(), testcase.low_s, "low s?");
@@ -1006,16 +1150,16 @@ mod tests {
                 length: 71,
                 sighash: 0x01,
                 low_s: true,
-                low_r: true,
-                der_encoded: true,
+                low_r: false,
+                der_encoded: DEREncoding::NegativeRValue,
             },
             SignatureInfoTestcase {
                 sig: "30440220cad9530d55219cf16ed352385961288fb50f162f791dce23aafef91ede284fe60220a890a5608f42a2ece4c9e6d078f94ba7f93ff9f978ae4373abe97f1bd6c6af3201".to_string(),
                 length: 71,
                 sighash: 0x01,
-                low_s: true,
-                low_r: true,
-                der_encoded: true,
+                low_s: false,
+                low_r: false,
+                der_encoded: DEREncoding::NegativeRValue,
             },
             // Input 0 of 39baeb3b2579dac22cec858be3a4d70d8d229206127b43fa4133ed63fb7b1b40
             SignatureInfoTestcase {
@@ -1024,7 +1168,7 @@ mod tests {
                 sighash: 0x01,
                 low_s: false,
                 low_r: true,
-                der_encoded: false,
+                der_encoded: DEREncoding::NullByteAtRValueStart,
             },
             // Input 0 of f4597ab5b6d45ba3a04486f3edf1a27f9f2cc3ab23300eb16d6b7067b8cf47dd
             SignatureInfoTestcase {
@@ -1033,7 +1177,7 @@ mod tests {
                 sighash: 0x81,
                 low_s: false,
                 low_r: false,
-                der_encoded: true,
+                der_encoded: DEREncoding::Valid,
             },
             // Input 0 of fb0a1d8d34fa5537e461ac384bac761125e1bfa7fec286fa72511240fa66864d
             SignatureInfoTestcase {
@@ -1042,7 +1186,7 @@ mod tests {
                 sighash: 0x01,
                 low_s: true,
                 low_r: true,
-                der_encoded: false,
+                der_encoded: DEREncoding::SigTooLong,
             },
             // Input 0 of 23befff6eea3dded0e34574af65c266c9398e7d7d9d07022bf1cd526c5cdbc94
             SignatureInfoTestcase {
@@ -1051,22 +1195,32 @@ mod tests {
                 sighash: 0x01,
                 low_s: true,
                 low_r: false,
-                der_encoded: false,
+                der_encoded: DEREncoding::SigTooLong,
+            },
+            // Input 0 of bf4bc335d1a76dd47aaa8fe21b22c18ba22018c7ca8f27b21f943e9004ffa335
+            SignatureInfoTestcase {
+                sig: "3044022036f7dd9863dc3a42447a28533009530a5090b24f4d71f64248def0c3bd2ba0a40220a17d437e715e5e4eb4703b5477df94b88e5eb3d7fb1704f7a035eba6b25e617501".to_string(),
+                length: 71,
+                sighash: 0x01,
+                low_s: false,
+                low_r: true,
+                der_encoded: DEREncoding::NegativeSValue,
             },
         ];
 
         for testcase in testcases.iter() {
-            println!("test signature: {}", testcase.sig);
+            println!("Testcase: {}", testcase.sig);
             let s = ScriptBuf::from_hex(&testcase.sig).unwrap().into_bytes();
-            assert!(s.is_ecdsa_signature(testcase.der_encoded));
-            assert!(!s.is_schnorr_signature());
             let si = SignatureInfo::from_u8_slice_ecdsa(&s).unwrap();
 
-            assert_eq!(si.was_der_encoded, testcase.der_encoded, "der encoded?");
+            assert_eq!(si.der_encoded, testcase.der_encoded, "der encoded?");
             assert_eq!(si.length, testcase.length, "length");
             assert_eq!(si.sig_hash, testcase.sighash, "sighash flag");
             assert_eq!(si.low_s(), testcase.low_s, "low s?");
             assert_eq!(si.low_r(), testcase.low_r, "low r?");
+
+            assert!(s.is_ecdsa_signature(testcase.der_encoded == DEREncoding::Valid));
+            assert!(!s.is_schnorr_signature());
         }
     }
 }
