@@ -147,14 +147,15 @@ impl OutputTypeDetection for TxOut {
                 return OutputType::OpReturn(OpReturnFlavor::Omni);
             } else if self.is_opreturn_stacks_blockcommit() {
                 return OutputType::OpReturn(OpReturnFlavor::StacksBlockCommit);
+            } else if self.is_opreturn_bip47_payment_code() {
+                return OutputType::OpReturn(OpReturnFlavor::Bip47PaymentCode);
             } else if self.is_opreturn_with_len(1) {
                 return OutputType::OpReturn(OpReturnFlavor::Len1Byte);
             } else if self.is_opreturn_with_len(20) {
                 return OutputType::OpReturn(OpReturnFlavor::Len20Byte);
+            // catch-all for 80 byte OP_RETURNs. Inlcude known flavors before this one
             } else if self.is_opreturn_with_len(80) {
                 return OutputType::OpReturn(OpReturnFlavor::Len80Byte);
-            } else if self.is_opreturn_bip47_payment_code() {
-                return OutputType::OpReturn(OpReturnFlavor::Bip47PaymentCode);
             }
             OutputType::OpReturn(OpReturnFlavor::Unspecified)
         } else if self.script_pubkey.is_p2pk() {
@@ -238,7 +239,7 @@ impl OutputTypeDetection for TxOut {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
         if script_pubkey_bytes.len() > 6 && script_pubkey_bytes[0] == 0x6A &&
                 // -- leaving this out as its not clear if all omni op_returns have the same length
-                // script_pubkey_bytes[1] == 0x14 && 
+                // script_pubkey_bytes[1] == 0x14 &&
                 script_pubkey_bytes[2] == 0x6f &&
                 script_pubkey_bytes[3] == 0x6d &&
                 script_pubkey_bytes[4] == 0x6e &&
@@ -469,5 +470,9 @@ mod tests {
         let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
         let out0 = &tx.output[0];
         assert!(out0.is_opreturn_bip47_payment_code());
+        assert_eq!(
+            out0.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::Bip47PaymentCode)
+        );
     }
 }
