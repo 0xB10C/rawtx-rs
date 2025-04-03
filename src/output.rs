@@ -77,6 +77,9 @@ pub enum OpReturnFlavor {
     Len20Byte,
     Len80Byte,
     Bip47PaymentCode,
+    /// A Rootstock (https://rootstock.io/) coinbase OP_RETURN marker.
+    /// Documented on https://dev.rootstock.io/node-operators/merged-mining/getting-started/
+    RSKBlock,
 }
 
 impl fmt::Display for OpReturnFlavor {
@@ -90,6 +93,7 @@ impl fmt::Display for OpReturnFlavor {
             OpReturnFlavor::Len20Byte => write!(f, "OP_RETURN (20 byte)"),
             OpReturnFlavor::Len80Byte => write!(f, "OP_RETURN (80 byte)"),
             OpReturnFlavor::Bip47PaymentCode => write!(f, "OP_RETURN (BIP 47 Payment Code)"),
+            OpReturnFlavor::RSKBlock => write!(f, "OP_RETURN (Rootstock merge mining info)"),
         }
     }
 }
@@ -124,6 +128,7 @@ pub trait OutputTypeDetection {
     fn is_opreturn_stacks_blockcommit(&self) -> bool;
     fn is_opreturn_with_len(&self, length: usize) -> bool;
     fn is_opreturn_bip47_payment_code(&self) -> bool;
+    fn is_opreturn_rsk_block(&self) -> bool;
 }
 
 impl OutputTypeDetection for TxOut {
@@ -149,6 +154,8 @@ impl OutputTypeDetection for TxOut {
                 return OutputType::OpReturn(OpReturnFlavor::StacksBlockCommit);
             } else if self.is_opreturn_bip47_payment_code() {
                 return OutputType::OpReturn(OpReturnFlavor::Bip47PaymentCode);
+            } else if self.is_opreturn_rsk_block() {
+                return OutputType::OpReturn(OpReturnFlavor::RSKBlock);
             } else if self.is_opreturn_with_len(1) {
                 return OutputType::OpReturn(OpReturnFlavor::Len1Byte);
             } else if self.is_opreturn_with_len(20) {
@@ -271,6 +278,7 @@ impl OutputTypeDetection for TxOut {
         }
         false
     }
+
     /// Checks if an output is a OP_RETURN output meeting the requirements
     /// for a resuable payment code
     ///
@@ -318,6 +326,26 @@ impl OutputTypeDetection for TxOut {
             return false;
         }
         true
+    }
+
+    /// Checks if an output is an OP_RETURN output meeting the requirements
+    /// for a RSK merge mining information output in a coinbase transaction.
+    ///
+    /// Format: OP_RETURN [length 0x29] [RSKBLOCK: (0x52534b424c4f434b3a)] [RskBlockInfo]
+    fn is_opreturn_rsk_block(&self) -> bool {
+        let script_pubkey_bytes = self.script_pubkey.as_bytes();
+        script_pubkey_bytes.len() == 43
+            && script_pubkey_bytes[0] == 0x6A
+            && script_pubkey_bytes[1] == 0x29 // length
+            && script_pubkey_bytes[2] == b'R'
+            && script_pubkey_bytes[3] == b'S'
+            && script_pubkey_bytes[4] == b'K'
+            && script_pubkey_bytes[5] == b'B'
+            && script_pubkey_bytes[6] == b'L'
+            && script_pubkey_bytes[7] == b'O'
+            && script_pubkey_bytes[8] == b'C'
+            && script_pubkey_bytes[9] == b'K'
+            && script_pubkey_bytes[10] == b':'
     }
 
     /// Compares the data length of an OP_RETURN output with the given `data_length`. Returns
@@ -513,6 +541,27 @@ mod tests {
             assert_eq!(
                 out.get_type(),
                 OutputType::OpReturn(OpReturnFlavor::Bip47PaymentCode)
+            );
+        }
+    }
+
+    #[test]
+    fn output_type_detection_opreturn_coinbase() {
+        let testcases = vec![
+            // rsk output, raw tx hex
+            // ---
+            // mainnet coinbase of block 890680 da7bc085ce387c50c8b280934a93d0b05ec987fa06345fa0a82c195f4c030916
+            (5, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff580338970d1b4d696e656420627920416e74506f6f6c3937304d0043010b007fe4fabe6d6d0b528b660c38cd611ff89d34e03ae3d92d7f9ac6bec6599422e8fcb18978507f08000000000000000000936100aeb83100000000ffffffff06220200000000000017a91442402a28dd61f2718a4b27ae72a4791d5bbdade7874b31eb120000000017a9145249bdf2c131d43995cff42e8feee293f79297a8870000000000000000266a24aa21a9ed2b33a26f7157d656c9fd7aab093e4a63a3c463ecf9294156002e6a134ac22f7200000000000000002f6a2d434f52450142fdeae88682a965939fee9b7b2bd5b99694ff644e3ecda72cb7961caa4b541b1e322bcfe0b5a0300000000000000000146a12455853415401000d130f0e0e0b041f12001300000000000000002b6a2952534b424c4f434b3a359c5f6d8523559163efd9f7884d3ef37b5953b334cd79efab0af412007111430120000000000000000000000000000000000000000000000000000000000000000000000000"),
+        ];
+        for (i, (output_index, txhex)) in testcases.iter().enumerate() {
+            println!("Testing case {}", i);
+            let rawtx = hex::decode(txhex).unwrap();
+            let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+            let rskout = &tx.output[*output_index];
+            assert!(rskout.is_opreturn_rsk_block());
+            assert_eq!(
+                rskout.get_type(),
+                OutputType::OpReturn(OpReturnFlavor::RSKBlock)
             );
         }
     }
