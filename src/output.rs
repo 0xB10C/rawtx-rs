@@ -2,7 +2,7 @@
 
 use std::{error, fmt};
 
-use bitcoin::{blockdata::opcodes::all as opcodes, script, secp256k1, Amount, TxOut};
+use bitcoin::{blockdata::opcodes::all as opcodes, script, Amount, TxOut};
 
 use crate::script::{Multisig, PubKeyInfo};
 
@@ -300,13 +300,13 @@ impl OutputTypeDetection for TxOut {
             return false;
         }
         // Bytes 3-34 - x value, must be a member of the secp256k1 group
-        let x_coordinate = &payload[3..35];
-        let mut pubkey_bytes = Vec::with_capacity(33);
-        pubkey_bytes.push(sign_byte);
-        pubkey_bytes.extend_from_slice(x_coordinate);
-        if secp256k1::PublicKey::from_slice(&pubkey_bytes).is_err() {
+        // However, we can't test this as the x value is blinded / masked. Since
+        // we aren't the receiver of the notifaction, we can't unblind/unmask the notification.
+        // However, it shouldn't be all zeros.
+        if payload[3..35].iter().all(|&b| b == 0) {
             return false;
         }
+
         // Bytes 35-66 - chain-code, must not be all zeros
         let chain_code = &payload[35..67];
         if chain_code.iter().all(|&b| b == 0) {
