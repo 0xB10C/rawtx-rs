@@ -350,7 +350,7 @@ impl OutputTypeDetection for TxOut {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
         script_pubkey_bytes.len() == 43
             && script_pubkey_bytes[0] == 0x6A
-            && script_pubkey_bytes[1] == 0x29 // length
+            && script_pubkey_bytes[1] == 0x29 // length (OP_PUSHBYTES_41)
             && script_pubkey_bytes[2] == b'R'
             && script_pubkey_bytes[3] == b'S'
             && script_pubkey_bytes[4] == b'K'
@@ -360,6 +360,20 @@ impl OutputTypeDetection for TxOut {
             && script_pubkey_bytes[8] == b'C'
             && script_pubkey_bytes[9] == b'K'
             && script_pubkey_bytes[10] == b':'
+            // F2Pool is using OP_PUSHDATA1 instead of the OP_PUSHBYTES_41
+            || script_pubkey_bytes.len() == 44
+            && script_pubkey_bytes[0] == 0x6A
+            && script_pubkey_bytes[1] == 0x4c // OP_PUSHDATA1 (F2Pool is doing this..)
+            && script_pubkey_bytes[2] == 0x29 // length
+            && script_pubkey_bytes[3] == b'R'
+            && script_pubkey_bytes[4] == b'S'
+            && script_pubkey_bytes[5] == b'K'
+            && script_pubkey_bytes[6] == b'B'
+            && script_pubkey_bytes[7] == b'L'
+            && script_pubkey_bytes[8] == b'O'
+            && script_pubkey_bytes[9] == b'C'
+            && script_pubkey_bytes[10] == b'K'
+            && script_pubkey_bytes[11] == b':'
     }
 
     /// Checks if an output is an OP_RETURN output meeting the requirements
@@ -384,9 +398,8 @@ impl OutputTypeDetection for TxOut {
     /// Format: OP_RETURN [length 0x12] [EXSAT (0x4558534154)] [Version 0x01] [synchronizer account]
     fn is_opreturn_exsat(&self) -> bool {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
-        script_pubkey_bytes.len() == 20
-            && script_pubkey_bytes[0] == 0x6A
-            && script_pubkey_bytes[1] == 0x12 // length
+        script_pubkey_bytes[0] == 0x6A
+            // script_pubkey_bytes[1] is the length, but this might be different for each pool
             && script_pubkey_bytes[2] == b'E'
             && script_pubkey_bytes[3] == b'X'
             && script_pubkey_bytes[4] == b'S'
@@ -599,32 +612,55 @@ mod tests {
             // ---
             // mainnet coinbase of block 890680 da7bc085ce387c50c8b280934a93d0b05ec987fa06345fa0a82c195f4c030916
             (5, 3, 4, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff580338970d1b4d696e656420627920416e74506f6f6c3937304d0043010b007fe4fabe6d6d0b528b660c38cd611ff89d34e03ae3d92d7f9ac6bec6599422e8fcb18978507f08000000000000000000936100aeb83100000000ffffffff06220200000000000017a91442402a28dd61f2718a4b27ae72a4791d5bbdade7874b31eb120000000017a9145249bdf2c131d43995cff42e8feee293f79297a8870000000000000000266a24aa21a9ed2b33a26f7157d656c9fd7aab093e4a63a3c463ecf9294156002e6a134ac22f7200000000000000002f6a2d434f52450142fdeae88682a965939fee9b7b2bd5b99694ff644e3ecda72cb7961caa4b541b1e322bcfe0b5a0300000000000000000146a12455853415401000d130f0e0e0b041f12001300000000000000002b6a2952534b424c4f434b3a359c5f6d8523559163efd9f7884d3ef37b5953b334cd79efab0af412007111430120000000000000000000000000000000000000000000000000000000000000000000000000"),
+            // mainnet coinbase of block 890688 f5adbbcf21bb598e260e5ea9ce40eba0c39747fe1347e1f3dd3072f19f0232d4
+            (5, 3, 4, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff590340970d1c4d696e656420627920416e74506f6f6c3935394d006b001d88b8f801fabe6d6d332a2c23490221c9658da4e117b5d8a3d6aea298b15e8eca1e6ef8b5060d19bc08000000000000000000f8608d6d020000000000ffffffff06220200000000000017a91442402a28dd61f2718a4b27ae72a4791d5bbdade7878f3dc4120000000017a9145249bdf2c131d43995cff42e8feee293f79297a8870000000000000000266a24aa21a9ed3bca42ac84fe2476aa283585a57912919dc0989a4ff0c2ed69006ec4f0aedcdb00000000000000002f6a2d434f5245012953559db5cc88ab20b1960faa9793803d0703374e3ecda72cb7961caa4b541b1e322bcfe0b5a0300000000000000000146a12455853415401000d130f0e0e0b041f12001300000000000000002b6a2952534b424c4f434b3ac217de142117834272725babb0a7ffc355805877cc34cd79efab0a0a007111bf0120000000000000000000000000000000000000000000000000000000000000000000000000"),
+            // mainnet coinbase of block 799999 c61bfc223ec25581bde44aa229deccb2ac855b99bff7098ecb6edb5dd5fca816
+            (3, 2, usize::MAX, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff5803ff340c1b4d696e656420627920416e74506f6f6c3930374a00b3004c23a345fabe6d6d4bd088d7ad6d953c6204534adf6e781f1b9dc83b631c445e22010a064e1e080b02000000000000002fd40000510e160000000000ffffffff04485d0f260000000017a9144b09d828dfc8baaba5d04ee77397e04b1050cc73870000000000000000266a24aa21a9ed8d16907a7020cedcdeb04966ea3550de7240d647e24ebbdd9dad990f324339c300000000000000002f6a2d434f52450164db24a662e20bbdf72d1cc6e973dbb2d12897d55997be5a09d05bb9bac27ec60419d0b373f32b2000000000000000002b6a2952534b424c4f434b3a4a327f77c940503af6f3b98b88419e0bfefff343ffe2a212327ed32a0053dfbf0120000000000000000000000000000000000000000000000000000000000000000000000000"),
+            // mainnet coinbase of block 840000 a0db149ace545beabbd87a8d6b20ffd6aa3b5a50e58add49a3d435f898c272cf
+            (1, usize::MAX, usize::MAX, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff600340d10c192f5669614254432f4d696e65642062792062757a7a3132302f2cfabe6d6d144b553283a6e1a150c9989428c0695e3a1bef7d482ed1f829bbe25897fd37dc10000000000000001058a4c9000cc3a31889b38ae08249000000000000ffffffff03fb80e4f2000000001976a914536ffa992491508dca0354e52f32a3a7a679a53a88ac00000000000000002b6a2952534b424c4f434b3a52e15efafb3e2cf6dc2fc0e6bde5cb1d7d2143f1e089bd874e6b7913005fb2a00000000000000000266a24aa21a9ed88601d3d03ccce017fe2131c4c95a7292e4372983148e62996bb5e2de0e4d1d80120000000000000000000000000000000000000000000000000000000000000000000000000"),
+            // mainnet coinbase of block 840011 feecf78a27927207dc21540efeda88cc2a32d7c59a7c1a72329b04918ffc031c
+            (5, 3, usize::MAX, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff64034bd10c2cfabe6d6d1f0fa69d2963d0c315a112f5f919c4d0225e21d109a8a40151a16f09460d4a6110000000f09f909f092f4632506f6f6c2f6600000000000000000000000000000000000000000000000000000000000000000000000500423d0100000000000622020000000000001976a914c6740a12d0a7d556f89782bf5faf0e12cf25a63988acf47c9083000000001976a914c85526a428126c00ad071b56341a5a553a5e96a388ac0000000000000000266a24aa21a9ed74a2c74f1251642cdeb0c0ac9222465f604afe78bfe6db8fc89d0c22924f8da300000000000000002f6a2d434f52450164db24a662e20bbdf72d1cc6e973dbb2d12897d5e7ec323813c943336c579e238228a8ebd096a7e50000000000000000266a24486174681f48b44796265b5f7229ddd13df801436533bfafb4ceb84c58c77483a9bbf3a200000000000000002c6a4c2952534b424c4f434b3a84396648c7e1be1123bfc316ffd41792323f833bb794b7e089bd871b005fb368012000000000000000000000000000000000000000000000000000000000000000000fdbe040"),
+            // mainnet coinbase of block 877777 ddeb60b3d20864be2a029338e24a54c838a29727238c7ad7a95db696e01da3b3
+            (6, 3, 4, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff6403d1640d2cfabe6d6d2b1fb3a4a828afdd7608d1f8c1b4dccc39d8a75f797a133a2f8a16d66f54893f10000000f09f909f092f4632506f6f6c2f7300000000000000000000000000000000000000000000000000000000000000000000000500673f084b000000000722020000000000001976a914c6740a12d0a7d556f89782bf5faf0e12cf25a63988acaefec312000000001976a914c85526a428126c00ad071b56341a5a553a5e96a388ac0000000000000000266a24aa21a9ed93a39b1567cf5ca8b9c4a80e4567e2ad642ed52c3b087f19b3f652148ed5ebb700000000000000002f6a2d434f524501ebbaf365b0d5fa072e2b2429db23696291f2c038e7ec323813c943336c579e238228a8ebd096a7e50000000000000000126a10455853415401051b0f0e0e0b1f1200130000000000000000266a24486174684878f3caa0965ac6a8c27596f07bb0968e14c2f68372c3903d970ed4e107e8f000000000000000002c6a4c2952534b424c4f434b3a16cf32df3db0d8dcd29513c17408ecdaffb11af833681fd54be8aa0b006c3ecb012000000000000000000000000000000000000000000000000000000000000000009a24f33e"),
+            // mainnet coinbase of block 877780 1c1cd0ebe9cbdf1ca5e9debbd5007321019c50046e29a17ca38895a309a432dd
+            (4, 3, usize::MAX, "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff5a03d4640d1d506f7765726564206279204c75786f7220546563682400320238d28ebcfabe6d6d84e0cf7e6b67e03bd3ff229bb662e6878c4f4ad115d4c9a1284fb8c6bd9012ec10000000000000000000c437001a360200000000ffffffff05220200000000000017a914bf73ad4cf3a107812bad3deb310611bee49a3c7987f53900130000000017a914056adde53ebc396a1b3b678bb0d3a5c116ff430c870000000000000000266a24aa21a9ed2159e3043910b8a942205da1e208a55841697cbc5fdc30add503374a23622d0000000000000000002f6a2d434f524501a21cbd3caa4fe89bccd1d716c92ce4533e4d4733f459cc4ca322d298304ff163b2a360d756c5db8400000000000000002b6a2952534b424c4f434b3ae5156a9b29201650c69df60be76c488512831869a47d33681fd54b18006c3f560120000000000000000000000000000000000000000000000000000000000000000000000000"),
+            // mainnet coinbase of block 877792 0d22b51487d7b06b76fe894898b0cccf598f037b0f42701f37875e531b6e48e9
+            (usize::MAX, 3, usize::MAX, "020000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff3103e0640d04843979672f466f756e6472792055534120506f6f6c202364726f70676f6c642f234456df3d616f0000000000ffffffff0422020000000000002251203daaca9b82a51aca960c1491588246029d7e0fc49e0abdbcc8fd17574be5c74b7efcc512000000002200207086320071974eef5e72eaa01dd9096e10c0383483855ea6b344259c244f73c20000000000000000266a24aa21a9ed9674ac27a1d6a81ee2087cc127ef242ccfa4d7f8245e41df9d2007c337dfb72d00000000000000002f6a2d434f5245012e50087fb834747606ed01ad67ad0f32129ab431e6d18fda214e5b9f350ffc7b6cf3058b9026e7650120000000000000000000000000000000000000000000000000000000000000000000000000"),
         ];
         for (i, (rsk_out_i, coredao_out_i, exsat_out_i, txhex)) in testcases.iter().enumerate() {
             println!("Testing case {}", i);
             let rawtx = hex::decode(txhex).unwrap();
             let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
 
-            let rsk_out = &tx.output[*rsk_out_i];
-            assert!(rsk_out.is_opreturn_rsk_block());
-            assert_eq!(
-                rsk_out.get_type(),
-                OutputType::OpReturn(OpReturnFlavor::RSKBlock)
-            );
+            // not all test cases have rsk outputs..
+            if *rsk_out_i != usize::MAX {
+                let rsk_out = &tx.output[*rsk_out_i];
+                assert!(rsk_out.is_opreturn_rsk_block());
+                assert_eq!(
+                    rsk_out.get_type(),
+                    OutputType::OpReturn(OpReturnFlavor::RSKBlock)
+                );
+            }
 
-            let coredao_out = &tx.output[*coredao_out_i];
-            assert!(coredao_out.is_opreturn_coredao());
-            assert_eq!(
-                coredao_out.get_type(),
-                OutputType::OpReturn(OpReturnFlavor::CoreDao)
-            );
+            // not all test cases have coredao outputs..
+            if *coredao_out_i != usize::MAX {
+                let coredao_out = &tx.output[*coredao_out_i];
+                assert!(coredao_out.is_opreturn_coredao());
+                assert_eq!(
+                    coredao_out.get_type(),
+                    OutputType::OpReturn(OpReturnFlavor::CoreDao)
+                );
+            }
 
-            let exsat_out = &tx.output[*exsat_out_i];
-            assert!(exsat_out.is_opreturn_exsat());
-            assert_eq!(
-                exsat_out.get_type(),
-                OutputType::OpReturn(OpReturnFlavor::ExSat)
-            );
+            // not all test cases have exsat outputs..
+            if *exsat_out_i != usize::MAX {
+                let exsat_out = &tx.output[*exsat_out_i];
+                assert!(exsat_out.is_opreturn_exsat());
+                assert_eq!(
+                    exsat_out.get_type(),
+                    OutputType::OpReturn(OpReturnFlavor::ExSat)
+                );
+            }
         }
     }
 }
