@@ -1,10 +1,8 @@
 //! Information about Bitcoin transaction outputs.
 
-use std::{error, fmt};
-
-use bitcoin::{blockdata::opcodes::all as opcodes, script, Amount, TxOut};
-
 use crate::script::{Multisig, PubKeyInfo};
+use bitcoin::{blockdata::opcodes::all as opcodes, script, Amount, TxOut};
+use std::{error, fmt};
 
 #[derive(Debug, Clone)]
 pub enum OutputError {
@@ -87,8 +85,11 @@ pub enum OpReturnFlavor {
     /// Documented on https://docs.exsat.network/guides-of-data-consensus/others/operation-references/synchronizer-operations/synchronizer-registration#register-on-chain-via-op_return
     ExSat,
     /// A HathorNetwork (https://hathor.network/) coinbase OP_RETURN marker.
-    /// Documented on
+    /// Documented on https://github.com/HathorNetwork/rfcs/blob/master/text/0006-merged-mining-with-bitcoin.md
     HathorNetwork,
+    /// A Ordinals Runestone
+    /// Documented on https://docs.ordinals.com/runes.html
+    Runestone,
 }
 
 impl fmt::Display for OpReturnFlavor {
@@ -106,6 +107,7 @@ impl fmt::Display for OpReturnFlavor {
             OpReturnFlavor::CoreDao => write!(f, "OP_RETURN (CoreDao delegation info)"),
             OpReturnFlavor::ExSat => write!(f, "OP_RETURN (ExSat info)"),
             OpReturnFlavor::HathorNetwork => write!(f, "OP_RETURN (HatorNetwork aux_block_hash)"),
+            OpReturnFlavor::Runestone => write!(f, "OP_RETURN (Runestone)"),
         }
     }
 }
@@ -144,6 +146,7 @@ pub trait OutputTypeDetection {
     fn is_opreturn_coredao(&self) -> bool;
     fn is_opreturn_exsat(&self) -> bool;
     fn is_opreturn_hathor(&self) -> bool;
+    fn is_opreturn_runestone(&self) -> bool;
 }
 
 impl OutputTypeDetection for TxOut {
@@ -177,6 +180,8 @@ impl OutputTypeDetection for TxOut {
                 return OutputType::OpReturn(OpReturnFlavor::ExSat);
             } else if self.is_opreturn_hathor() {
                 return OutputType::OpReturn(OpReturnFlavor::HathorNetwork);
+            } else if self.is_opreturn_runestone() {
+                return OutputType::OpReturn(OpReturnFlavor::Runestone);
             } else if self.is_opreturn_with_len(1) {
                 return OutputType::OpReturn(OpReturnFlavor::Len1Byte);
             } else if self.is_opreturn_with_len(20) {
@@ -428,6 +433,39 @@ impl OutputTypeDetection for TxOut {
             && script_pubkey_bytes[3] == b'a'
             && script_pubkey_bytes[4] == b't'
             && script_pubkey_bytes[5] == b'h'
+    }
+
+    /// Checks if an output is an OP_RETURN output meeting the requirements
+    /// for a Runestone OP_RETURN output.
+    ///
+    /// Format: OP_RETURN OP_PUSHNUM_13 [OP_PUSHBYTES_X]
+    fn is_opreturn_runestone(&self) -> bool {
+        let script_pubkey_bytes = self.script_pubkey.as_bytes();
+        if script_pubkey_bytes[0] == opcodes::OP_RETURN.to_u8()
+            && script_pubkey_bytes[1] == opcodes::OP_PUSHNUM_13.to_u8()
+        {
+            for (index, inst_result) in self.script_pubkey.instructions().enumerate() {
+                if let Ok(inst) = inst_result {
+                    match index {
+                        0 => (), // we already checked that this is an OP_RETURN
+                        1 => (), // we already checked that this is an OP_PUSHNUM_13
+                        _ => {
+                            // all others need to be data pushes
+                            match inst {
+                                script::Instruction::Op(_) => {
+                                    return false;
+                                }
+                                script::Instruction::PushBytes(_) => (),
+                            }
+                        }
+                    }
+                } else {
+                    return false;
+                }
+            }
+            return true;
+        }
+        false
     }
 
     /// Compares the data length of an OP_RETURN output with the given `data_length`. Returns
@@ -698,6 +736,37 @@ mod tests {
                     OutputType::OpReturn(OpReturnFlavor::HathorNetwork)
                 );
             }
+        }
+    }
+
+    #[test]
+    fn output_type_detection_opreturn_runestone() {
+        let testcases = vec![
+            // output, raw tx hex
+            // ---
+            // mainnet dc83243928d731a8d1f4de922fcbd27f9c5fac76533c053c8f41d0d363e1e891 with
+            // Runestone output as output 0
+            (0, "02000000000102b3d7ed7f7749a7b1ee032f1f8e40df38f97ce4b4cb0ffae1b3d3d31a96adf9090100000000ffffffff7eff527136c8eb2c37a1c0cea9076ca34411e491759ad8685046d97aa9e3e15d0200000000ffffffff0300000000000000000e6a5d0b00c0a23303d89af1dc12012202000000000000160014979bdd94f2d5972c062a7839ef114c193eca970ae1a4160000000000160014d58d2895ae676864b28af1d980c797d83f4d781f02473044022005309bf4bb5df2e5757deffedf171f3b93c19431ac1706debc6c0419ac3ab31e022002600e160dbeede6ab9473746c24cd9a382a2e05c67db203886497a8f713099c012102b9f2ec0c7c12cf5d1781518cfeadbe70d912084c07659f38a537ed1c2aa0e7a502473044022050ee4c0c3ba75d83a40d6304e4285e368b626e669d602f28c4ae7f6c32ac8b3e0220651b3299be01d93bdf91def09a1430e36a5fd25e43218caa5402e94c3b2a6918012103497a874c3412319689cc435756a820c3cf4cbb22d88ccafa29a8dc5e74eaa53800000000"),
+            // mainnet 2d9dfbe8e8acd34fefa32b5640b1f8bf3b620879055b9e3e0a48df8bfd9123b1 with
+            // Runestone output as output 1
+            (1, "02000000000101c68b2c3b546fb597e8cc4d10c9149a422b3dabef222bb28b83090b106da1282d0000000000ffffffff042202000000000000225120ffdd573c4ffac896f32c87c55923c5259736c4eda62b69e2317da1f41d8760120000000000000000116a5d0eff7f818cec82d08bc0a88281d215d62900000000000016001471a0ad6195dfc360f87452dd43e7a185f2667f28e867040000000000160014becb2a1cb327c74b96b1b5e4944f3155fa38793902473044022077e76fd6d6507fc7ac123c0a8c54b22be3566261ea28aab05479e9f86434ba1b02205c67a890799723a4174f48fef696e5d53a2ee30ae6481ef1cfe2fc10d8cb7c1c012102e951e84704fca4c56e7687e5d66b70501408860b1eb38f96930115c2c1af0b4700000000"),
+            // mainnet 2bb85f4b004be6da54f766c17c1e855187327112c231ef2ff35ebad0ea67c69e with
+            // Runestone output as output 1
+            (1, "020000000001017fb9cc941aa0ca3aaf339783564d2d29ec3254a9128f5d49ad3eeb002aeb40ec0000000000000000000242342a6b000000002251203b8b3ab1453eb47e2d4903b963776680e30863df3625d3e74292338ae7928da10000000000000000246a5d21020704b5e1d8e1c8eeb788a30705a02d039f3e01020680dc9afd2808c7e8430a640340924b2624416402a52ed7cf4eba6b2c535d2def8e649a74ed97aaca5ec54881ef3b34da68bb13d76d6b420e60297a9247cb081d1e59cb2c260b1509cff25d4b3158204c04e894d5357840e324b24c959ca6a5082035f6ffae12f331202bc84bf4612eac0063036f7264010b2047f22ed15d3082f5e9a005864528e4f991ade841a9c5846e2c118425878b6be1010d09b530368c74df10a3036821c04c04e894d5357840e324b24c959ca6a5082035f6ffae12f331202bc84bf4612e00000000"),
+            // mainnet 95bfa45afda983f3d6b9893a7e9200c12c4015bcdaffc3b933d508f9e47b7483 with
+            // Runestone output as output 1
+            (1, "02000000000101ebbdf6c9c8802683f7002220f4598f4fb09e9312246e84295618d8a236cb647a0000000000fdffffff024404000000000000225120bdd80b1763ec6cc124c578c9cd3f9321f65186135123b921e2062cea7b029f3700000000000000001e6a5d1b0205048b93fbc8f4c580850a010203940505e84b06acd1d5bec304034085e21f3bd22fa1c17c974891fb274ce5daf19cdc7a8e4dc246c044b52748559ec1c55237753edbd8ebe7e9148336a459043517eb252fd80db0bd3b3d44c5eb537f203706667a27041bec19c7e0ff94aaa11457860e960b34cc2aa3b7bc4c8866d326ac0063036f72640102022202010320ef287cdfbf0d302346654d1e5c75c4ddf708ae4abc81caa6a89eb9880abf1d93010b209198aa67989b85f5e3c404f3465a0d0e7f8b137e963100b18bd298e3b03166b6010d088bc91e492f020a0a6821c13706667a27041bec19c7e0ff94aaa11457860e960b34cc2aa3b7bc4c8866d32640d10c00"),
+        ];
+        for (i, (output_index, txhex)) in testcases.iter().enumerate() {
+            println!("Testing case {}", i);
+            let rawtx = hex::decode(txhex).unwrap();
+            let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+            let out = &tx.output[*output_index];
+            assert!(out.is_opreturn_runestone());
+            assert_eq!(
+                out.get_type(),
+                OutputType::OpReturn(OpReturnFlavor::Runestone)
+            );
         }
     }
 }
