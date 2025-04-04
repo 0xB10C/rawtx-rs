@@ -314,14 +314,17 @@ impl OutputTypeDetection for TxOut {
     ///
     fn is_opreturn_bip47_payment_code(&self) -> bool {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
-        // Check the length and structure
-        if script_pubkey_bytes.len() != 83
-            && script_pubkey_bytes[0] != 0x6A
-            && script_pubkey_bytes[1] != 0x4C
-            && script_pubkey_bytes[2] != 0x50
+        if script_pubkey_bytes.len() != 83 {
+            return false;
+        }
+
+        if !(script_pubkey_bytes[0] == opcodes::OP_RETURN.to_u8()
+            && script_pubkey_bytes[1] == opcodes::OP_PUSHDATA1.to_u8()
+            && script_pubkey_bytes[2] == 80)
         {
             return false;
         }
+
         // Examine the payload
         let payload = &script_pubkey_bytes[3..];
         // Byte 0 - version should be 0x01 or 0x02
@@ -608,6 +611,20 @@ mod tests {
         assert!(out1.is_p2tr());
         assert_eq!(out0.get_type(), OutputType::P2a);
         assert_eq!(out1.get_type(), OutputType::P2tr);
+    }
+
+    #[test]
+    fn output_type_detection_bip47_failure() {
+        // mainnet e6a5226770651406459b65f31b46ba9f164f273e9a0b4d4dd58c4cd8dbc56d78
+        // This tx (and others) caused a problem with the inital implemenation of bip47 detection.
+        // See https://github.com/0xB10C/rawtx-rs/pull/30/files#r2029106483
+        // The transaction has a short OP_RETURN as output 0 we'd previously access an invalid
+        // index because the length wasn't correctly checked.
+        let txhex = "020000000001015792fbb130d7429483d7b30a90408f917883434c825b1a1ff06f416ac909f40d0300000000ffffffff030000000000000000036a01003c2d5000000000001976a914b7b5c111d77baf2881a1076e3224ff318b620fb888ac7bd80c0000000000220020eca0c4e30e7eafea1c3388ba7760de0484be8e548e6520bc69a7635e0f640fab0500483045022100b50e9df79b938f4dbc1af2b75635c5192a5b1819671b0f84c3707829ec138c7402206fd3413a5475602e1414ddb2dd1eed67360cf845312801ab145e8072079058b5014730440220774d3856a6d05fe0877ef117462cfe5e4812c2e3b53402b60b11743dd26ed90602206d1d212b8f3f2dd2e454d5c35a2a8017aa8674426f24097c569cb0049658850701473044022017af04b20a119352d06def462cef26942e92f0f2ef2f0216d5993930f83f0c34022035d2ccd624b63a0531cea9259be703c0aa9ff1c2cf3d576c4878310cfa3ae9ff01ad532102272aefe25b54a7f5fe991a68e21146c34ac9bcafd81682dc599d4a337ce2535c2102c33eb3a569e78f8cd53480128383e602ba06314700e83dfcb5da149132a6b3e52102f1ec97fcf92d60baa4baa9b35d6e61ea06337db698919125e590af67cc30ae192102f2416ebb7b55a691ef094056d989b30d97f4600db03e6a6f9339e3034977b54f21039be0c58b27b79011b50a0ca2c73dd029ec909711345a61c3984630d1010dbe5355ae00000000";
+        let rawtx = hex::decode(txhex).unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let out = &tx.output[0];
+        assert!(!out.is_opreturn_bip47_payment_code());
     }
 
     #[test]
