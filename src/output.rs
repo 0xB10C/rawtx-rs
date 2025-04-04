@@ -413,7 +413,8 @@ impl OutputTypeDetection for TxOut {
     /// Format: OP_RETURN [length 0x12] [EXSAT (0x4558534154)] [Version 0x01] [synchronizer account]
     fn is_opreturn_exsat(&self) -> bool {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
-        script_pubkey_bytes[0] == 0x6A
+        script_pubkey_bytes.len() > 8
+            && script_pubkey_bytes[0] == 0x6A
             // script_pubkey_bytes[1] is the length, but this might be different for each pool
             && script_pubkey_bytes[2] == b'E'
             && script_pubkey_bytes[3] == b'X'
