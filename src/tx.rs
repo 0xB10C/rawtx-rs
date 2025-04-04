@@ -65,8 +65,6 @@ impl From<output::OutputError> for TxInfoError {
 pub struct TxInfo {
     pub txid: Txid,
     pub version: i32,
-    /// Number of outputs minus one change output if there is more than one output.
-    pub payments: u32,
     pub vsize: u64,
     pub weight: u64,
     /// Information about the transactions absolute time-lock.
@@ -85,18 +83,12 @@ impl TxInfo {
     /// Creates an new [TxInfo] from a [Transaction].
     /// Can return a TxInfoError if the transaction and it's scripts can't be parsed.
     pub fn new(tx: &Transaction) -> Result<TxInfo, TxInfoError> {
-        let payments = if tx.output.len() > 1 {
-            tx.output.len() as u32
-        } else {
-            1
-        };
-
-        let mut input_infos = vec![];
+        let mut input_infos = Vec::with_capacity(tx.input.len());
         for input in tx.input.iter() {
             input_infos.push(InputInfo::new(input)?);
         }
 
-        let mut output_infos = vec![];
+        let mut output_infos = Vec::with_capacity(tx.output.len());
         for output in tx.output.iter() {
             output_infos.push(OutputInfo::new(output)?);
         }
@@ -104,7 +96,6 @@ impl TxInfo {
         Ok(TxInfo {
             txid: tx.compute_txid(),
             version: tx.version.0,
-            payments,
             vsize: tx.vsize() as u64,
             weight: tx.weight().to_wu(),
             is_coinbase: tx.is_coinbase(),
@@ -113,6 +104,24 @@ impl TxInfo {
             input_infos,
             output_infos,
         })
+    }
+
+    /// Number of non-OP_RETURN outputs minus one change output if there is more than one
+    /// non-OP_RETURN output. This should approximate the number of real-world "payments"
+    /// happening in this transaction. However, we don't actually know if a certain transaction
+    /// really made X payments. It's more a guess-timate and helpful when looking at many
+    /// transactions and blocks over time to observe changes in a payment trends.
+    pub fn payments(&self) -> u32 {
+        let non_opreturn_outputs = self
+            .output_infos
+            .iter()
+            .filter(|o| !o.is_opreturn())
+            .count();
+        match non_opreturn_outputs {
+            0 => 0,
+            1 => 1u32,
+            _ => (non_opreturn_outputs - 1) as u32,
+        }
     }
 
     /// Returns true if the transaction signals explicit RBF replicability by
@@ -471,6 +480,37 @@ mod tests {
         let raw_tx = hex::decode("02000000000103edfe97964f954656db279834f3fb810cf2868c26f1fe5fd2fd3bb6d293da80500100000017160014517f3e10051df116600af7f322ebad1eb0834676ffffffff6a5d444fe88ef03df7d8062c429850286c434cb9ee77947b6e73dc34e200ef040000000017160014c2af9fdf9f2e8dbe406163e1b3c22c4a98c22bccffffffff1df2a57be954c93f002d4d272616ebbe7952ec100fd77e8c9118a4df88ae694a0000000017160014fc89a4451ba56e5511aac20a634206391f267120ffffffff03a13f05000000000017a914acb331118b1b1d233dc5ee3972d8b0eb10a389648748d104000000000017a914e416571b39ca465e70ca21c4401925a2d53c9cd687823b9e000000000017a9144ff5174680c12f362699f4186e822e64c0f741ca8702473044022017f06d1a4baf4783566f5a751c3f5239d896728e26a34b484d5b804a83571b31022038e76fa397eae5644651a0c7c1fa8b4533f4df061d315ac4794669958e7afb3e0121032adeb16dc182591e03bbd57f68bbee23d1d2b95315103008ee7b2afc8151d8a00247304402200fadb196510acc654ddbd3b3be87051e0db8bf58a003f07628be44a666a2bc2102200e8010a7abdf6c635f5a3ec7ab06c2d4e7ce520e99a617724349025b588b52630121027c9b7d4b9789bdc5fdd4e170d593619bd185b376d53eaca3463f3925ca8047af024730440220486e51ace259a49ff14fd069b3c2ae4890da290651a9f364dbe352b67aee10d402203dc2f37182ed5bae92ebed04d531d7e34c6e1dc17e8ecaa60f83b054f967827401210295dec103680805c7934cde983acdbb3224119bfa770814808f98c651655d764a00000000").unwrap();
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         assert!(!TxInfo::new(&tx).unwrap().is_bip69_compliant());
+    }
+
+    #[test]
+    fn tx_payments() {
+        let testcases = vec![
+            // mainnet df4a45b6fea86b144a95c80aa9cef12319a34f592b82398e3779056ed08c1f7d
+            // A two input and four output transaction
+            (3, "02000000000102069ed58b5561484f7e4a7a7c350b185299bbdba802456b0d80e6ec1cbdbbbc9a0200000000ffffffffd58368763ad102d594859403cf7cf71dc92782f6fb607fb8aafda0b525c70d0c0000000000ffffffff04a644010000000000160014990c5256fd8581a2123131491cf757352fc92f79b0ad0100000000001976a9143842229d25f208e1354595087da59977a7de340a88aceeca090000000000160014f71cd3db25d346ead787b40a0555893bb06861ccf7b2050000000000160014e0145df166b20db925a3f7492889a5eb5ff6d363024730440220422332ad8e7606092423ced37f2b093058081fadeee6194ac8da52d6ac179eff022053c3751f14be917abf67e30035a017eec96453b4ba00525ceb124de742a804540121029c73c9de8db31bd1e6c27b8e0f83f7caf385f4d83b37912b8aa8ab23e047d9cb0247304402200fea5229da4aee2fc111c680d3ecd9b9bb9bd412d74cbc6967c9c4143ee4a06b02205fac85cb479f889f9f7c30965c59ba93c8ef72ae97bf39cfcd14535b6a2abf0501210306cd8c46641987aec3a0d36876135ad3fb27c3acba2dba752d319f029d5fe1f800000000"),
+            // mainnet 55248b67e86f44db36b86a32c51c90163a62a160ed569530f54b1e52a1b73094
+            // A one input and one output transaction
+            (1, "020000000001017d5edb2c1483064b20e02e9506b45811aa1782be487b258df0059771e354b4db0000000000fdffffff012a634702000000001600141d7310914c7190bfa5d5f989c17f58a7ec870edb024830450221008640353600ec553a06cf047193076f6fb344150776d21c0afdd37393bb6387cd022060a019011c1991437e1f81030ebd1856ae986b0791487dd65c5f953d44206be80121028a96fb1aae84d63edcbb8d31c0878fda4d11ccf4b05d13e863ca0f3d2c24fa7d00000000"),
+            // mainnet 1226fa65993778032d9b940211980da6596f894cbd4f9e8c6d68ae458d9d866a
+            // A one input and two output transaction
+            (1, "01000000000101af734457ce3599296126306b4be48931336d7074b26079b02bea5caa612e3b760100000000ffffffff0210980200000000001600147e79fdadeff8b0b5d1f455377611df393810a252407a2b00000000001600143776a8dd42704d357c0a1f4531dc1ee83ecce0910248304502210087d244b808e0205ce1acc77d15d46a53fb9574103e74821e6fc532dfb58cf2180220459c4ad9729486dcaedacfc483488427e7edfaa220d6332e84dcddf5e9e6e861012102c9ed734050521fe27747d6a17cf919f34b707686db6ce50d0a96c990bd754ffa00000000"),
+            // mainnet 1d1eebc1f4d25ba217aafa050e6db487edeb1e11b476539a31e8502b1d2f2a08
+            // A one input and three output transaction where one output is an OP_RETURN output
+            (1, "0200000000010196c86fc2817bd20ce957e9ceb9ac7b908e44d56f3c16301e33c9f8ea7d2732280200000000ffffffff032202000000000000225120f16b4c81b96cf6baad1ba955156ca947d76df997d0829b26eef8c764f8ecbd600000000000000000116a5d0eff7f818cec82d08bc0a88281d215764a00000000000016001431a845e68288a5046cb02dc509bd982a4ea94f2d024730440220190f3124ff5bd0df7fc9b5568016fcfc646251ee428b3565c5b14a70f6bd13f6022067627da4d26a07679d74b6774435ab01515832e3596b4c798aee889be65abf7d012102e3f72c926b604e2591441412d7eee863aa2308bf0076b6e6efbe55705ac476d000000000"),
+            // mainnet 6f660e9f1bbfcc8435593eb8ff70a501275ad6cdbaa536747bd9d55bdbeda65a (Libre; Relay)
+            // A one input and three output transaction where two outputs are an OP_RETURN output
+            // from https://b10c.me/observations/09-non-standard-transactions/#non-mandatory-script-verify-flag
+            (1, "0200000000010196c86fc2817bd20ce957e9ceb9ac7b908e44d56f3c16301e33c9f8ea7d2732280200000000ffffffff032202000000000000225120f16b4c81b96cf6baad1ba955156ca947d76df997d0829b26eef8c764f8ecbd600000000000000000116a5d0eff7f818cec82d08bc0a88281d215764a00000000000016001431a845e68288a5046cb02dc509bd982a4ea94f2d024730440220190f3124ff5bd0df7fc9b5568016fcfc646251ee428b3565c5b14a70f6bd13f6022067627da4d26a07679d74b6774435ab01515832e3596b4c798aee889be65abf7d012102e3f72c926b604e2591441412d7eee863aa2308bf0076b6e6efbe55705ac476d000000000"),
+            // mainnet cb22f12d777e95e426fd31840171af453c600390276d29d307ef34dbaeda4387 (never; gonna; give; you; up)
+            // A one input and six output transaction where five outputs are an OP_RETURN output
+            // from https://b10c.me/observations/09-non-standard-transactions/#non-mandatory-script-verify-flag
+            (1, "0200000000010179bf07f0c130de21cbaa2daccf1fd9052eefb89f37a7f0fd7cb0c598f7bf8bee0100000000fdffffff060000000000000000076a056e657665720000000000000000076a05676f6e6e610000000000000000066a04676976650000000000000000056a03796f750000000000000000046a027570546901000000000016001472a0c5560127b92dc8649862f38094b28ff3b2ef0247304402200f0c6d3b1f661b7d76cc9c0566c1c6159e288d671b327cdc7989c7b853e67adc022079819f87c5c51e70b4e2b56dfe6868bc742c9486071754bde1936034f4e1b755012102fb7d5362c637767ffadf734fa279070f0d4a0d0caae1784193c6fe592f20ac8700000000"),
+        ];
+        for c in testcases.iter() {
+            let rawtx = hex::decode(&c.1).unwrap();
+            let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+            assert_eq!(TxInfo::new(&tx).unwrap().payments(), c.0);
+        }
     }
 
     #[test]
