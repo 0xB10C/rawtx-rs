@@ -445,7 +445,8 @@ impl OutputTypeDetection for TxOut {
     /// Format: OP_RETURN OP_PUSHNUM_13 [OP_PUSHBYTES_X]
     fn is_opreturn_runestone(&self) -> bool {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
-        if script_pubkey_bytes[0] == opcodes::OP_RETURN.to_u8()
+        if script_pubkey_bytes.len() > 2
+            && script_pubkey_bytes[0] == opcodes::OP_RETURN.to_u8()
             && script_pubkey_bytes[1] == opcodes::OP_PUSHNUM_13.to_u8()
         {
             for (index, inst_result) in self.script_pubkey.instructions().enumerate() {
