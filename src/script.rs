@@ -838,7 +838,7 @@ mod tests {
     use super::Multisig;
     use crate::script::{DEREncoding, PubkeyType, PublicKey};
     use crate::{input::InputInfo, output::OutputInfo, script::PubKeyInfo};
-    use bitcoin::{ScriptBuf, Transaction};
+    use bitcoin::{Script, ScriptBuf, Transaction};
 
     #[test]
     fn test_input_pubkey_info() {

@@ -6,7 +6,7 @@ use bitcoin::hash_types::Txid;
 use bitcoin::hashes::Hash;
 use bitcoin::script;
 use bitcoin::{Amount, Transaction, TxIn, TxOut};
-use input::{InputInfo, InputSigops};
+use input::{InputInfo, InputSigops, InputSigChecks};
 use output::{OutputInfo, OutputSigops};
 use std::collections::HashMap;
 use std::{error, fmt};
@@ -277,6 +277,24 @@ impl TransactionSigops for Transaction {
     }
 }
 
+/// Counts the actual signature checks performed when spending a transaction's
+/// inputs, based on the witness/scriptsig data. Unlike [`TransactionSigops`],
+/// which counts the transaction's contribution to the sigops budget, this
+/// counts the number of real signature validations executed.
+pub trait TransactionSigChecks {
+    fn sig_checks(&self) -> Result<usize, TxInfoError>;
+}
+
+impl TransactionSigChecks for Transaction {
+    fn sig_checks(&self) -> Result<usize, TxInfoError> {
+        let mut sigops = 0usize;
+        for input in self.input.iter() {
+            sigops += input.sig_checks()?;
+        }
+        Ok(sigops)
+    }
+}
+
 fn is_bip69_compliant(inputs: &[TxIn], outputs: &[TxOut]) -> bool {
     let inputs_sorted = if inputs.len() == 1 {
         true
@@ -440,6 +458,7 @@ pub fn is_p2sh_counterparty(tx: &Transaction) -> bool {
 #[cfg(test)]
 mod tests {
     use super::TransactionSigops;
+    use super::TransactionSigChecks;
     use super::TxInfo;
     use bitcoin::Transaction;
 
@@ -511,6 +530,15 @@ mod tests {
             let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
             assert_eq!(TxInfo::new(&tx).unwrap().payments(), c.0);
         }
+    }
+
+    #[test]
+    fn test_transaction_sig_checks() {
+        // mainnet 949591ad468cef5c41656c0a502d9500671ee421fadb590fbc6373000039b693
+        // single P2MS 2-of-3 input with 2 sigs → sig_checks = 2
+        let rawtx = hex::decode("010000000110a5fee9786a9d2d72c25525e52dd70cbd9035d5152fac83b62d3aa7e2301d58000000009300483045022100af204ef91b8dba5884df50f87219ccef22014c21dd05aa44470d4ed800b7f6e40220428fe058684db1bb2bfb6061bff67048592c574effc217f0d150daedcf36787601483045022100e8547aa2c2a2761a5a28806d3ae0d1bbf0aeff782f9081dfea67b86cacb321340220771a166929469c34959daf726a2ac0c253f9aff391e58a3c7cb46d8b7e0fdc4801ffffffff0180a21900000000001976a914971802edf585cdbc4e57017d6e5142515c1e502888ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        assert_eq!(tx.sig_checks().unwrap(), 2);
     }
 
     #[test]
