@@ -3,11 +3,12 @@
 use bitcoin::blockdata::opcodes::all as opcodes;
 use bitcoin::blockdata::script;
 use bitcoin::script::Instruction;
-use bitcoin::{Sequence, TxIn};
+use bitcoin::{Script, Sequence, TxIn};
 use std::{error, fmt};
 
 use crate::script::{
-    instructions_as_vec, Multisig, PubKeyInfo, PublicKey, Signature, SignatureInfo,
+    instructions_as_vec, Multisig, PubKeyInfo, PublicKey, Signature,
+    SignatureInfo,
 };
 
 pub const TAPROOT_ANNEX_INDICATOR: u8 = 0x50;
@@ -290,6 +291,93 @@ impl InputSigops for TxIn {
         };
 
         Ok(sigops)
+    }
+}
+
+/// Returns the tapscript from a P2TR script-path witness, stripping the
+/// optional annex (last item starting with 0x50) and returning the
+/// second-to-last item as a script. Returns `None` if the witness has
+/// fewer than 2 non-annex items.
+fn tapscript_from_witness(witness: &bitcoin::Witness) -> Option<&Script> {
+    let items: Vec<&[u8]> = witness.iter().collect();
+    let items = if items
+        .last()
+        .map(|a| a.first() == Some(&TAPROOT_ANNEX_INDICATOR))
+        .unwrap_or(false)
+    {
+        &items[..items.len() - 1]
+    } else {
+        &items[..]
+    };
+    items
+        .len()
+        .checked_sub(2)
+        .map(|i| Script::from_bytes(items[i]))
+}
+
+/// Counts the actual signature checks performed when spending an input,
+/// based on the witness/scriptsig data. Unlike [`InputSigops`], which counts
+/// the input's contribution to the sigops budget, this counts the number of
+/// real signature validations executed.
+pub trait InputSigChecks {
+    fn sig_checks(&self) -> Result<usize, InputError>;
+}
+
+impl InputSigChecks for TxIn {
+    fn sig_checks(&self) -> Result<usize, InputError> {
+        match self.get_type()? {
+            InputType::P2pk | InputType::P2pkLaxDer => Ok(1),
+            InputType::P2pkh | InputType::P2pkhLaxDer => Ok(1),
+            InputType::P2ms | InputType::P2msLaxDer => {
+                let count = instructions_as_vec(&self.script_sig)
+                    .map_err(InputError::SigOpsInfo)?
+                    .iter()
+                    .filter(|i| i.is_ecdsa_signature(false))
+                    .count();
+                Ok(count)
+            }
+            InputType::P2sh => {
+                // Count actual ECDSA signatures in the scriptsig, excluding
+                // the redeem script (last push).
+                let items = instructions_as_vec(&self.script_sig)
+                    .map_err(InputError::SigOpsInfo)?;
+                let count = items.iter()
+                    .take(items.len().saturating_sub(1))
+                    .filter(|i| i.is_ecdsa_signature(false))
+                    .count();
+                Ok(count)
+            }
+            InputType::P2shP2wpkh | InputType::P2wpkh => Ok(1),
+            InputType::P2shP2wsh | InputType::P2wsh => {
+                // Count actual ECDSA signatures in the witness, excluding
+                // the witness script (last item).
+                let count = self.witness.iter()
+                    .take(self.witness.len().saturating_sub(1))
+                    .filter(|item| item.is_ecdsa_signature(false))
+                    .count();
+                Ok(count)
+            }
+            InputType::P2trkp => Ok(1),
+            InputType::P2trsp => {
+                // Count actual Schnorr signatures in the witness, excluding
+                // the tapscript and control block (and optional annex).
+                let items: Vec<&[u8]> = self.witness.iter().collect();
+                let stack_end = if items
+                    .last()
+                    .map(|a| a.first() == Some(&TAPROOT_ANNEX_INDICATOR))
+                    .unwrap_or(false)
+                {
+                    items.len().saturating_sub(3)
+                } else {
+                    items.len().saturating_sub(2)
+                };
+                let count = items[..stack_end].iter()
+                    .filter(|item| item.is_schnorr_signature())
+                    .count();
+                Ok(count)
+            }
+            _ => Ok(0), // Coinbase, P2a, Unknown
+        }
     }
 }
 
@@ -827,7 +915,7 @@ impl InputInscriptionDetection for TxIn {
             return Ok(false);
         }
         // Inscription reveals can be identified by inspecting the tapscript
-        if let Some(tapscript) = self.witness.tapscript() {
+        if let Some(tapscript) = self.witness.taproot_leaf_script().map(|ls| ls.script) {
             if let Ok(instructions) = instructions_as_vec(tapscript) {
                 let mut instruction_iter = instructions.iter();
                 while let Some(instruction) = instruction_iter.next() {
@@ -847,8 +935,8 @@ impl InputInscriptionDetection for TxIn {
 #[cfg(test)]
 mod tests {
     use super::{
-        InputInfo, InputInscriptionDetection, InputMultisigDetection, InputSigops, InputType,
-        InputTypeDetection, MultisigInputInfo,
+        InputInfo, InputInscriptionDetection, InputMultisigDetection, InputSigops,
+        InputSigChecks, InputType, InputTypeDetection, MultisigInputInfo,
     };
     use bitcoin::Transaction;
 
@@ -1091,5 +1179,62 @@ mod tests {
         let in0 = &tx.input[0];
         assert!(in0.is_p2pkh(false).unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2pkhLaxDer);
+    }
+
+    #[test]
+    fn input_sig_checks_p2pkh() {
+        // mainnet ab8358ee2d4573d975c5b693fcd349bd09a089327f5c12ca8a4abd350f18e670
+        let rawtx = hex::decode("01000000013e536ab65e20de9b57dd2859abd7289fd0452c3f5ac672b956d9c787d1933466230000006a47304402201b6e925baff25e8f9fda211f4319a0d9bc5add80d285db5609b882a80b4c50d002200e797a1435838df602634dd69e829bc884bc995aac77ea57ddf5c92e44dacc6f012103b773940906913e962d81b6c4d7c405212bf91ae736123eba7970859edefba84effffffff0188f40000000000001976a91408653d83a8bff4c66edd72921659326bd6ef04cc88ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        assert_eq!(tx.input[0].sig_checks().unwrap(), 1);
+    }
+
+    #[test]
+    fn input_sig_checks_p2ms_2of3() {
+        // mainnet 949591ad468cef5c41656c0a502d9500671ee421fadb590fbc6373000039b693 — counts actual sig pushes
+        let rawtx = hex::decode("010000000110a5fee9786a9d2d72c25525e52dd70cbd9035d5152fac83b62d3aa7e2301d58000000009300483045022100af204ef91b8dba5884df50f87219ccef22014c21dd05aa44470d4ed800b7f6e40220428fe058684db1bb2bfb6061bff67048592c574effc217f0d150daedcf36787601483045022100e8547aa2c2a2761a5a28806d3ae0d1bbf0aeff782f9081dfea67b86cacb321340220771a166929469c34959daf726a2ac0c253f9aff391e58a3c7cb46d8b7e0fdc4801ffffffff0180a21900000000001976a914971802edf585cdbc4e57017d6e5142515c1e502888ac00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        assert_eq!(tx.input[0].sig_checks().unwrap(), 2);
+    }
+
+    #[test]
+    fn input_sig_checks_p2sh() {
+        // mainnet 986e143fae33eb39bb2bdb2d5e0f6cb003ab8c6e638b4adf02b5a1ae8a81b4ec — 1-of-2 P2SH, 1 sig
+        let rawtx = hex::decode("0200000001b5d093fa119005dbb1e6efe4abae8352b9be31999dd498e2a4242d12a1bcac8800000000910047304402203c3e5cb8e6dd567804efb6f26523229ea67ed1f4529a35fd92a64407db790cce02201ba1f5173e792cc9e63769700e8f7673eae8ac705b58caa5931ec614f56f1acc014751210377622563e0110914888b7dc9364d6d341804aa0d7f09b3dea04f14a7dad104452103c71b40231260e990938f1be55bbf8c580832bcfdcb60a4e64139f12b313fe35552aefeffffff0258c70d00000000001976a914bab670335c428fe202157fb867dd06acca4ac25388ac5c2d53000000000017a914ad69347daeb1811224627597d5d8ebffa78c4c3e8700000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        assert_eq!(tx.input[0].sig_checks().unwrap(), 1);
+    }
+
+    #[test]
+    fn input_sig_checks_p2wpkh() {
+        // mainnet 4aba5c7fe256a9997aa93cab91f1c0405074b30b34b6a5c0bbde425322d40ee7
+        let rawtx = hex::decode("01000000000101ce73651d1ef6e687a66a76adbaf16741a205e7230bff0ae7259d36c478ec1a339a00000000ffffffff018a399c0000000000160014a14296a183d6e4c2f1696713a9db833e66fcb2d50247304402204da5741dab6897b961d996c0bdd0fed51f33afa54459769a81019d04a35fb1a802206f47143811a512a73b9d1112f5f0202740c554bf853fe18e2c72e58381c5452b012103e37b04cf32aa417e3ef25c0fe19faefcdbb6e6b2eaca38837dabc4c146cdc95000000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        assert_eq!(tx.input[0].sig_checks().unwrap(), 1);
+    }
+
+    #[test]
+    fn input_sig_checks_p2wsh_2of2() {
+        // mainnet f72d52eaae494da7c438a8456a9b20d2791fdf2b1c818825458f8f707d7b8011
+        let rawtx = hex::decode("01000000000101ec2ad0604a0e708963a39d16936118ab5fb36dcb5d5e07f3dc2ca149412500eb0100000000ffffffff0233cc08000000000017a9147f152249241d7320a80a013fd46907c1a1eff5a4879a3a5c15000000002200202ceaf557137c8f1f8ac2c8ee4a6656f9533c250c62b40006956ecb44e5c2357e040047304402201489d616c691fb1a4dd86caa495991463d88e049fdc6e316bd09877cb4bc17de02201ebba0c182a6e28024944e63638788f44b77acbd85fbea60b1225f180def8fc901483045022100c00674b0810fe3e5db048bdd231f7a50edc1cc2ffd75a68497d43fae7853277802200a9422b26290b7521574a5c161e2116ef3e906030f6ed08ca38b6ee6c5690ddb0147522103a2ea7e0b94c48fd799bf123c1f19b50fb6d15da310db8223fd7a6afd8b03e6932102eba627e6ea5bb7e0f4c981596872d0a97d800fb836b5b3a585c3f2b99c77a0e552ae00000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        assert_eq!(tx.input[0].sig_checks().unwrap(), 2);
+    }
+
+    #[test]
+    fn input_sig_checks_p2trkp() {
+        // signet 75a1a2488770ba0506b9899b1d03dc232f5b22f00dffc3ca3ea6640a53de8403
+        let rawtx = hex::decode("0200000000010232b1c6063448c8089d4e7a500399555daec6bc1f3fef281016518c1de3d154cb0000000000feffffff32b1c6063448c8089d4e7a500399555daec6bc1f3fef281016518c1de3d154cb0100000000feffffff02301b0f00000000002251204b03959143386c56a1646c9d1002314c6acecd79ee0f0976fb9fa0f1f0837b1be31f0000000000001600140af8bb24c9504e8740076bb07b755237d4af6e67014159f6076cc04503a9bc72f137aa4af523ab05f5805b5fcb9e0b0b0f258a86afd30c7298e11203f6f27a1408385ec5b9fc1d16be738d628a4aac62eef1cfdac10b0102473044022044d39c6b67334c5e1aa0be056b2200221f8ec84e7319ba1b1cbe6df4dc2f6b1d02207289dd7e3d362355f22ff1df76965391ccd9c4d529a216947d2434f16dfd9b7901210338008b55bf51d06440c64129665a56c2eb828fdad50cca74191d29f92475e962b5680000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        assert_eq!(tx.input[0].sig_checks().unwrap(), 1);
+    }
+
+    #[test]
+    fn input_sig_checks_p2trsp() {
+        // signet 692937bb7864cfcce9f7a5171d6af3646bf479204ffb9356a0d6ce8a4a7952f1
+        // tapscript: OP_SHA256 <hash> OP_EQUALVERIFY <pubkey> OP_CHECKSIG → 1 sigop
+        let rawtx = hex::decode("02000000000101e1e91316b8780879bf5ac7559cbb3da5c65f19e57ed822615d832c53b2eeb5360000000000ffffffff01905f010000000000160014734e7298bfe985c5e0148a5a37179b66d9ad0b0804400d1e89bad817848056c3f32b4226f70946b84d358ff5a635b70f7ce40a43a94eba9b8ce213bc56d8ab6f9bb2f90d700cfed82fd93d91f41e7b3cf27c5b3ea77b20107661134f21fc7c02223d50ab9eb3600bc3ffc3712423a1e47bb1f9a9dbf55f45a8206c60f404f8167a38fc70eaf8aa17ac351023bef86bcb9d1086a19afe95bd533388204edfcf9dfe6c0b5c83d1ab3f78d1b39a46ebac6798e08e19761f5ed89ec83c10ac41c1f30544d6009c8d8d94f5d030b2e844b1a3ca036255161c479db1cca5b374dd1cc81451874bd9ebd4b6fd4bba1f84cdfb533c532365d22a0a702205ff658b17c900000000").unwrap();
+        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        assert_eq!(tx.input[0].sig_checks().unwrap(), 1);
     }
 }
