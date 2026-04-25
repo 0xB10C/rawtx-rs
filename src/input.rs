@@ -827,8 +827,8 @@ impl InputInscriptionDetection for TxIn {
             return Ok(false);
         }
         // Inscription reveals can be identified by inspecting the tapscript
-        if let Some(tapscript) = self.witness.tapscript() {
-            if let Ok(instructions) = instructions_as_vec(tapscript) {
+        if let Some(tapscript) = self.witness.taproot_leaf_script() {
+            if let Ok(instructions) = instructions_as_vec(tapscript.script) {
                 let mut instruction_iter = instructions.iter();
                 while let Some(instruction) = instruction_iter.next() {
                     if matches!(instruction, Instruction::PushBytes(bytes) if bytes.is_empty())

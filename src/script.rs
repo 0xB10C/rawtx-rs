@@ -25,7 +25,7 @@ const ECDSA_SIG_MAX_STRICT_DER_LEN: usize = 73;
 // `Vec<script::Instruction>` for easier handling.
 pub fn instructions_as_vec(
     script: &bitcoin::Script,
-) -> Result<Vec<script::Instruction>, script::Error> {
+) -> Result<Vec<script::Instruction<'_>>, script::Error> {
     script
         .instructions()
         .collect::<Result<Vec<script::Instruction>, script::Error>>()
