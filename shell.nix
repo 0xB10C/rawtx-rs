@@ -7,6 +7,5 @@ pkgs.mkShell {
       pkgs.cargo
       pkgs.rustfmt
       pkgs.rustc
-      pkgs.clang_15
     ];
 }
