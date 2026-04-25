@@ -21,3 +21,6 @@ rc4 = { version = "0.1.0", optional = true }
 default = []
 # used to detect counterparty transactions
 counterparty = [ "rc4" ]
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
