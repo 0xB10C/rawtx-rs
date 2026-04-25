@@ -776,7 +776,7 @@ impl InputTypeDetection for TxIn {
 
         // check for control block
         let control_block = &witness_vec[control_block_index];
-        if control_block.len() < 1 + 32 || (control_block.len() - 1) % 32 != 0 {
+        if control_block.len() < 1 + 32 || !(control_block.len() - 1).is_multiple_of(32) {
             return false;
         }
 
