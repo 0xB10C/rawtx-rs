@@ -657,8 +657,12 @@ impl InputTypeDetection for TxIn {
         if script_sig[0] == opcodes::OP_PUSHBYTES_22.to_u8()
             && script_sig[1] == opcodes::OP_PUSHBYTES_0.to_u8()
             && script_sig[2] == opcodes::OP_PUSHBYTES_20.to_u8()
-            && self.witness.to_vec()[0].is_ecdsa_signature(/* strict DER */ true)
-            && self.witness.to_vec()[1].is_pubkey()
+            && self
+                .witness
+                .nth(0)
+                .unwrap()
+                .is_ecdsa_signature(/* strict DER */ true)
+            && self.witness.nth(1).unwrap().is_pubkey()
         {
             return true;
         }
@@ -701,8 +705,12 @@ impl InputTypeDetection for TxIn {
             return false;
         }
 
-        if self.witness.to_vec()[0].is_ecdsa_signature(/* strict DER */ true)
-            && self.witness.to_vec()[1].is_pubkey()
+        if self
+            .witness
+            .nth(0)
+            .unwrap()
+            .is_ecdsa_signature(/* strict DER */ true)
+            && self.witness.nth(1).unwrap().is_pubkey()
         {
             return true;
         }
@@ -740,13 +748,12 @@ impl InputTypeDetection for TxIn {
         }
         if self.witness.len() == 1 {
             // without annex
-            return self.witness.to_vec()[0].is_schnorr_signature();
+            return self.witness.nth(0).unwrap().is_schnorr_signature();
         } else if self.witness.len() == 2 {
             // with annex
-            if !self.witness.to_vec()[1].is_empty()
-                && self.witness.to_vec()[1][0] == TAPROOT_ANNEX_INDICATOR
-            {
-                return self.witness.to_vec()[0].is_schnorr_signature();
+            let second = self.witness.nth(1).unwrap();
+            if !second.is_empty() && second[0] == TAPROOT_ANNEX_INDICATOR {
+                return self.witness.nth(0).unwrap().is_schnorr_signature();
             }
         }
         false
@@ -765,17 +772,15 @@ impl InputTypeDetection for TxIn {
 
         let last_witness_element_index = self.witness.len() - 1;
         let mut control_block_index = last_witness_element_index;
-        let witness_vec = self.witness.to_vec();
 
         // check for annex
-        if !witness_vec[last_witness_element_index].is_empty()
-            && witness_vec[last_witness_element_index][0] == TAPROOT_ANNEX_INDICATOR
-        {
+        let last_element = self.witness.nth(last_witness_element_index).unwrap();
+        if !last_element.is_empty() && last_element[0] == TAPROOT_ANNEX_INDICATOR {
             control_block_index -= 1;
         }
 
         // check for control block
-        let control_block = &witness_vec[control_block_index];
+        let control_block = self.witness.nth(control_block_index).unwrap();
         if control_block.len() < 1 + 32 || !(control_block.len() - 1).is_multiple_of(32) {
             return false;
         }
