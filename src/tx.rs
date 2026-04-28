@@ -274,35 +274,25 @@ impl TransactionSigops for Transaction {
 }
 
 fn is_bip69_compliant(inputs: &[TxIn], outputs: &[TxOut]) -> bool {
-    let inputs_sorted = if inputs.len() == 1 {
-        true
-    } else {
-        let mut to_be_sorted_inputs = inputs.to_vec();
-        to_be_sorted_inputs.sort_by(|a, b| {
-            let mut a_outpoint_txid_reversed = a.previous_output.txid.to_byte_array();
-            a_outpoint_txid_reversed.reverse();
-            let mut b_outpoint_txid_reversed = b.previous_output.txid.to_byte_array();
-            b_outpoint_txid_reversed.reverse();
+    let inputs_sorted = inputs.windows(2).all(|w| {
+        let mut a_txid = w[0].previous_output.txid.to_byte_array();
+        a_txid.reverse();
+        let mut b_txid = w[1].previous_output.txid.to_byte_array();
+        b_txid.reverse();
 
-            a_outpoint_txid_reversed
-                .cmp(&b_outpoint_txid_reversed)
-                .then_with(|| a.previous_output.vout.cmp(&b.previous_output.vout))
-        });
+        a_txid
+            .cmp(&b_txid)
+            .then_with(|| w[0].previous_output.vout.cmp(&w[1].previous_output.vout))
+            .is_le()
+    });
 
-        inputs.to_vec() == to_be_sorted_inputs
-    };
+    let outputs_sorted = outputs.windows(2).all(|w| {
+        w[0].value
+            .cmp(&w[1].value)
+            .then_with(|| w[0].script_pubkey.cmp(&w[1].script_pubkey))
+            .is_le()
+    });
 
-    let outputs_sorted = if outputs.len() == 1 {
-        true
-    } else {
-        let mut to_be_sorted_outputs = outputs.to_vec();
-        to_be_sorted_outputs.sort_by(|a, b| {
-            a.value
-                .cmp(&b.value)
-                .then_with(|| a.script_pubkey.cmp(&b.script_pubkey))
-        });
-        outputs.to_vec() == to_be_sorted_outputs
-    };
     inputs_sorted && outputs_sorted
 }
 
