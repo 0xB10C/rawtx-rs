@@ -850,20 +850,21 @@ mod tests {
         InputInfo, InputInscriptionDetection, InputMultisigDetection, InputSigops, InputType,
         InputTypeDetection, MultisigInputInfo,
     };
+    use crate::testdata;
     use bitcoin::Transaction;
+
+    fn decode_tx(hex: &str) -> Transaction {
+        bitcoin::consensus::deserialize(&hex::decode(hex).unwrap()).unwrap()
+    }
 
     #[test]
     fn reveals_inscription() {
-        // mainnet ba4f42037f92c2782ee3dd8c75ce0ce80d8a04b8d36e6ed6a36452f512e66dfd
-        let rawtx = hex::decode("02000000000101da5159649742d35e069f74724bb72cbb116415d72e11771a17420e2201d4ecf30000000000fdffffff0122020000000000002251201e6960b35d5da5c6c9ce0a18d989518bf546b4968a4ad046d9d664f5585f50440340ad42d4bec479e22866603b11048a64a3e5d366046d494278336798a51fd5fe5166221949e3025b25b505433ed871e20399fd82ffc867b70de8acef8e86f91f857e20318de3d918b6ca5ce115f5b00b3ed0b9c85ca7ebe8f0ccbe9de0e05e45de9293ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d3800387b2270223a226272632d3230222c226f70223a227472616e73666572222c227469636b223a224d4d5353222c22616d74223a22323030227d6821c1318de3d918b6ca5ce115f5b00b3ed0b9c85ca7ebe8f0ccbe9de0e05e45de929300000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_INSCRIPTION);
         let in0 = &tx.input[0];
         assert!(in0.is_p2trsp());
         assert!(in0.reveals_inscription().unwrap());
 
-        // mainnet 8cf0e9c282233d72bae9b90a8f5b656d5decaa75c4a8ad54f457e45cd087d295
-        let rawtx = hex::decode("02000000000101db7427b32d5755c1ea1fad429d87e6a641a2682e53c0c7cfaf3bec578c349b680000000000fdffffff022202000000000000225120f97a587234b7e22e7b5de2d61b1861e0c8774eedb9b48190fabe41b083d24926db06000000000000160014d02d8c6d6b2307d96bc2bf99e89acab7fb3a923003402817599a681318c55b335f5fb29e6755a4f23e345a8dc130cb1e478f2dec76f748378d279f5b82ca70587d91caff2f906146df28785931b09f186489f317c2add020287b98bfb98dd21a639ee15a8414e70f4bb5f8747961f4c2ef1596519d465db1ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004c897b2270223a2022746170222c20226f70223a2022646d742d6d696e74222c2022646570223a2022303161393235393934656563313435313261653935386466313761353231666437663835616636613731633132373061656332303432323866613661613336346930222c20227469636b223a20226e6174222c2022626c6b223a202231363934227d6821c1f7f702f2e97e53bd22500cc1207871e88abba8871df5495ad16f3c73a5d7460e00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_INSCRIPTION_2);
         let in0 = &tx.input[0];
         assert!(in0.is_p2trsp());
         assert!(in0.reveals_inscription().unwrap());
@@ -871,9 +872,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_p2pk() {
-        // mainnet ea44e97271691990157559d0bdd9959e02790c34db6c006d779e82fa5aee708e
-        let rawtx = hex::decode("0100000001169e1e83e930853391bc6f35f605c6754cfead57cf8387639d3b4096c54f18f400000000484730440220576497b7e6f9b553c0aba0d8929432550e092db9c130aae37b84b545e7f4a36c022066cb982ed80608372c139d7bb9af335423d5280350fe3e06bd510e695480914f01ffffffff0100ca9a3b000000001976a914340cfcffe029e6935f4e4e5839a2ff5f29c7a57188ac00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2PK);
         let in0 = &tx.input[0];
         assert!(in0.is_p2pk(true).unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2pk);
@@ -881,9 +880,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_p2pkh() {
-        // mainnet ab8358ee2d4573d975c5b693fcd349bd09a089327f5c12ca8a4abd350f18e670
-        let rawtx = hex::decode("01000000013e536ab65e20de9b57dd2859abd7289fd0452c3f5ac672b956d9c787d1933466230000006a47304402201b6e925baff25e8f9fda211f4319a0d9bc5add80d285db5609b882a80b4c50d002200e797a1435838df602634dd69e829bc884bc995aac77ea57ddf5c92e44dacc6f012103b773940906913e962d81b6c4d7c405212bf91ae736123eba7970859edefba84effffffff0188f40000000000001976a91408653d83a8bff4c66edd72921659326bd6ef04cc88ac00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2PKH);
         let in0 = &tx.input[0];
         assert!(in0.is_p2pkh(true).unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2pkh);
@@ -891,9 +888,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_nested_p2wpkh() {
-        // mainnet 9671f217d4d12b1717606403468fd0b1ed7362e33282f8834d4d38e67f85767b
-        let rawtx = hex::decode("020000000001017287da3eef7369c13bacb9fb92e7b1c3aabe04ead8d76b620c3966623fb1da510000000017160014ace9fb5f9aab3d34f272775424bbacd1132ff00effffffff01614804000000000017a91431ab116fe54444ef21c7656f3bb4bfe2520210fe8702473044022053c98f1e2f3dad4ad3e53c1f2e78a833a9e3bb0a47e592dc840312d053805c4602200bb65ecf01cb49d7506df37ff61141584c731c127973d4a651ab0f5cc5de04c60121029b8741cc06f098df1fad8f1fb920e1d610024b9f0190708b0dd777ba9cd1a55300000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2SH_P2WPKH);
         let in0 = &tx.input[0];
         assert!(in0.is_nested_p2wpkh());
         assert_eq!(in0.get_type().unwrap(), InputType::P2shP2wpkh);
@@ -901,9 +896,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_p2wpkh() {
-        // mainnet 4aba5c7fe256a9997aa93cab91f1c0405074b30b34b6a5c0bbde425322d40ee7
-        let rawtx = hex::decode("01000000000101ce73651d1ef6e687a66a76adbaf16741a205e7230bff0ae7259d36c478ec1a339a00000000ffffffff018a399c0000000000160014a14296a183d6e4c2f1696713a9db833e66fcb2d50247304402204da5741dab6897b961d996c0bdd0fed51f33afa54459769a81019d04a35fb1a802206f47143811a512a73b9d1112f5f0202740c554bf853fe18e2c72e58381c5452b012103e37b04cf32aa417e3ef25c0fe19faefcdbb6e6b2eaca38837dabc4c146cdc95000000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2WPKH);
         let in0 = &tx.input[0];
         assert!(in0.is_p2wpkh());
         assert_eq!(in0.get_type().unwrap(), InputType::P2wpkh);
@@ -911,9 +904,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_p2sh() {
-        // mainnet 986e143fae33eb39bb2bdb2d5e0f6cb003ab8c6e638b4adf02b5a1ae8a81b4ec
-        let rawtx = hex::decode("0200000001b5d093fa119005dbb1e6efe4abae8352b9be31999dd498e2a4242d12a1bcac8800000000910047304402203c3e5cb8e6dd567804efb6f26523229ea67ed1f4529a35fd92a64407db790cce02201ba1f5173e792cc9e63769700e8f7673eae8ac705b58caa5931ec614f56f1acc014751210377622563e0110914888b7dc9364d6d341804aa0d7f09b3dea04f14a7dad104452103c71b40231260e990938f1be55bbf8c580832bcfdcb60a4e64139f12b313fe35552aefeffffff0258c70d00000000001976a914bab670335c428fe202157fb867dd06acca4ac25388ac5c2d53000000000017a914ad69347daeb1811224627597d5d8ebffa78c4c3e8700000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2SH);
         let in0 = &tx.input[0];
         assert!(in0.is_p2sh().unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2sh);
@@ -921,21 +912,16 @@ mod tests {
 
     #[test]
     fn input_sigops_nonstandard_rsk_p2sh() {
-        // mainnet 44c857ef596332bbdcec28d2337a3c7eda10c23da0dc1769325b40c9220c4816, non-standard RSK input with more than MAX_P2SH_SIGOPS (15) sigops
-        let rawtx = hex::decode("0200000001e5af92d188010aa34910c71de4a55d6f142c0989a62af388b10bd8a33b54e86c00000000fd3803004830450221008b42e9089fd73cd1367d7963664314fd7affc434766b97ef35e57f10c764eca802204bdf578f5339448053cc077b410050ca95f54f0773d1be37e4c8f7028b5b630d014730440220599fa798537dbca65defc998088b56df77993914f7b1f6d262ae210c49caf00a022013f11bc2c85befdcf36aac357e0d1cd9cd1954ccbbe6c90c56575b5e68dbb17401473044022040cf3f17bb5639e9a64c89566b21a13339e362ef27f02ac3bdd09a79b5564a4402203556c8a5ef82e99c4148ef1b9626d663fc8aabefee8eecbb016439d0dc255b6c01483045022100cc20e9db6c4ae335eb6a9af4f9f915b8dc9e6e130af4266a3c720464796d68b3022010203f84d6f9cc20fba81d2971fcb276595c6c5ed6f009f99da5cea93ff5dfdc01483045022100e39c1896c909b87f2d860ba23af7e94873dfeccee33657d28041335ca708bb36022002b70cb3050bf418645e4703958252706e3008ac7a940a7248747f5651b0ea0a01004dc801645521020ace50bab1230f8002a0bfe619482af74b338cc9e4c956add228df47e6adae1c210231a395e332dde8688800a0025cccc5771ea1aa874a633b8ab6e5c89d300c7c3621025093f439fb8006fd29ab56605ffec9cdc840d16d2361004e1337a2f86d8bd2db21026b472f7d59d201ff1f540f111b6eb329e071c30a9d23e3d2bcd128fe73dc254c2103250c11be0561b1d7ae168b1f59e39cbc1fd1ba3cf4d2140c1a365b2723a2bf93210357f7ed4c118e581f49cd3b4d9dd1edb4295f4def49d6dcf2faaaaac87a1a0a422103ae72827d25030818c4947a800187b1fbcc33ae751e248ae60094cc989fb880f62103e05bf6002b62651378b1954820539c36ca405cbb778c225395dd9ebff67802992103ecd8af1e93c57a1b8c7f917bd9980af798adeb0205e9687865673353eb041e8d59670350cd00b275532102370a9838e4d15708ad14a104ee5606b36caaaaf739d833e67770ce9fd9b3ec80210257c293086c4d4fe8943deda5f890a37d11bebd140e220faa76258a41d077b4d42103c2660a46aa73078ee6016dee953488566426cf55fc8011edd0085634d75395f92103cd3e383ec6e12719a6c69515e5559bcbe037d0aa24c187e1e26ce932e22ad7b35468aeffffffff026cd03c00000000001976a9143a267e4435e590d9e711d04954d8c8ef1003658588aca59f1d020000000017a91485aaffdabb34e8f7403291b3eff574129cc2486d8700000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2SH_RSK);
         let in0 = &tx.input[0];
         assert!(in0.is_p2sh().unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2sh);
-        let in0_sigops = in0.sigops().unwrap();
-        assert_eq!(in0_sigops, 80);
+        assert_eq!(in0.sigops().unwrap(), 80);
     }
 
     #[test]
     fn input_type_detection_nested_p2wsh() {
-        // mainnet 716e81f6ac8cb5e11bcf7d850e6049fe2e8067a1650378b4045c8ad005cac76b
-        let rawtx = hex::decode("0100000000010158cffd9e03ff81e25367b93c78fe57c9a47dfd50e3365a0a210d7a75068333340100000023220020779b3b5851cbe7c95c7b21cd919aaf3df20b1f62f1dfc13bf93e734b3c88443ffdffffff01fca10000000000001976a914ea800dbd672b26181f9858bc0abedf40be747f3688ac0400483045022100d602eb075e28221a1b4622f24fa0a60242c90742033f032d40856ce0caed097c022061d066b92311b9492def6e0cc8bc0b76f73050b607a6d268f35d18d636ec7b940147304402203335fa91e31b8ec4e3ac5ddeb7fb2546c55a7aa6ee9548844337007dd29fcaac02204fbb78515a7085a9342c97c55b4f948681c3c1c80f9b2be5c9bd8e77a8cb6c240169522102a7b58e322616b2ac3752f59349b941edb5e9913f70864fc94a927b7592fe6d952103416995a2564b1fae34f521ad6745ffd04291bbda7075105e04720879ad728da52102523aa65c4a392a2ea8d81b8cd3bc19bba4b62a152f94a83f428c9b018dfc42d553ae00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2SH_P2WSH);
         let in0 = &tx.input[0];
         assert!(in0.is_nested_p2wsh());
         assert_eq!(in0.get_type().unwrap(), InputType::P2shP2wsh);
@@ -943,9 +929,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_p2ms_1of2() {
-        // mainnet 99cb2139052dc88508f2fe35235c1c5685229a45bef3db70413c5ac43c41ca0a 1-of-2 P2MS input
-        let rawtx = hex::decode("01000000013de6aff69d5ebeca70a84d1dcef768bbcadbad210084012f8cda24233c8db278000000004b00493046022100a41a9015c847f404a14fcc81bf711ee2ce57583987948d54ebe540aafca97e0d022100d4e30d1ca42f77df8290b8975aa8fc0733d7c0cfdd5067ca516bac6c4012b47a01ffffffff01607d860500000000475121037953dbf08030f67352134992643d033417eaa6fcfb770c038f364ff40d7615882100dd28dfb81abe444429c466a1e3ab7c22365c48f234ef0f8d40397202969d4e9552ae00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2MS_1OF2);
         let in0 = &tx.input[0];
         assert!(in0.is_p2ms(true).unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2ms);
@@ -960,9 +944,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_p2ms_2of3() {
-        // mainnet 949591ad468cef5c41656c0a502d9500671ee421fadb590fbc6373000039b693 2-of-3 P2MS input
-        let rawtx = hex::decode("010000000110a5fee9786a9d2d72c25525e52dd70cbd9035d5152fac83b62d3aa7e2301d58000000009300483045022100af204ef91b8dba5884df50f87219ccef22014c21dd05aa44470d4ed800b7f6e40220428fe058684db1bb2bfb6061bff67048592c574effc217f0d150daedcf36787601483045022100e8547aa2c2a2761a5a28806d3ae0d1bbf0aeff782f9081dfea67b86cacb321340220771a166929469c34959daf726a2ac0c253f9aff391e58a3c7cb46d8b7e0fdc4801ffffffff0180a21900000000001976a914971802edf585cdbc4e57017d6e5142515c1e502888ac00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2MS_2OF3);
         let in0 = &tx.input[0];
         assert!(in0.is_p2ms(true).unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2ms);
@@ -977,9 +959,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_unknown() {
-        // mainnet 0f24294a1d23efbb49c1765cf443fba7930702752aba6d765870082fe4f13cae
-        let rawtx = hex::decode("0100000003d4dfa41ffe9825af0aad023f084b4dd4a599d6cb8d083e58e3a53e8ad682a6ae010000000401030103ffffffffe2274e1294e1708f344e7cd5156648750bc60d3bf3705130cdcba66675e3439b010000000401030103fffffffff41d101368d124c5b10bf130bceece07623d87767a2c950a35d1b7b6217a2329000000000401030103ffffffff0170032d00000000001976a91429c9743283afd76eed5811788b20b23f9eece00788ac00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_UNKNOWN_INPUT);
         let in0 = &tx.input[0];
         assert!(in0.is_p2sh().unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2sh);
@@ -987,9 +967,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_p2wsh_2of2() {
-        // mainnet f72d52eaae494da7c438a8456a9b20d2791fdf2b1c818825458f8f707d7b8011
-        let rawtx = hex::decode("01000000000101ec2ad0604a0e708963a39d16936118ab5fb36dcb5d5e07f3dc2ca149412500eb0100000000ffffffff0233cc08000000000017a9147f152249241d7320a80a013fd46907c1a1eff5a4879a3a5c15000000002200202ceaf557137c8f1f8ac2c8ee4a6656f9533c250c62b40006956ecb44e5c2357e040047304402201489d616c691fb1a4dd86caa495991463d88e049fdc6e316bd09877cb4bc17de02201ebba0c182a6e28024944e63638788f44b77acbd85fbea60b1225f180def8fc901483045022100c00674b0810fe3e5db048bdd231f7a50edc1cc2ffd75a68497d43fae7853277802200a9422b26290b7521574a5c161e2116ef3e906030f6ed08ca38b6ee6c5690ddb0147522103a2ea7e0b94c48fd799bf123c1f19b50fb6d15da310db8223fd7a6afd8b03e6932102eba627e6ea5bb7e0f4c981596872d0a97d800fb836b5b3a585c3f2b99c77a0e552ae00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2WSH);
         let in0 = &tx.input[0];
         assert!(in0.is_p2wsh());
         assert_eq!(in0.get_type().unwrap(), InputType::P2wsh);
@@ -1004,9 +982,7 @@ mod tests {
 
     #[test]
     fn input_type_detection_p2wsh_non_multisig() {
-        // mainnet 41f18d932642a396b3469072860a10b193c53116d869dce9e2619b23555311cc
-        let rawtx = hex::decode("02000000000101d29021fae716cbc98333fa1a88fa2a5cf6fd2db642a94ff33d7dfff2ad361fc30100000000ffffffff01ffdc0b00000000001600142c3a8a495c16839d5d975c1ca0ee504af825b52105483045022100d45ed56c316849b6ff15a568608aa887be0f5a09ad89d76f686949f320509d5902204e61db9bf6bb965b2de1ee0bb6d687a28579b0f725bde9d0e6c9a1c0a8cb6a0f0121020251be8c4c748fce671be54e247534f34d4c1b7f7784e3fc08ef41b3805a4af820535692b33b9f226fd70cd5571c68df7bfa5463d4a334a5ceb4d200fd0663f06a0101636382012088a820697ce4e1d91cdc96d53d1bc591367bd48855a076301972842aa5ffcb8fcb8b618876a9142c3a8a495c16839d5d975c1ca0ee504af825b52188ac6704c9191960b17576a9145a59f40f4ecb1f86efb13752b600ea3b8d4c633988ac6800000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2WSH_NON_MULTISIG);
         let in0 = &tx.input[0];
         assert!(in0.is_p2wsh());
         assert_eq!(in0.get_type().unwrap(), InputType::P2wsh);
@@ -1015,9 +991,7 @@ mod tests {
 
     #[test]
     fn coinbase_input_detection() {
-        // mainnet b39fa6c39b99683ac8f456721b270786c627ecb246700888315991877024b983 coinbase @ 300000
-        let rawtx = hex::decode("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4803e09304062f503253482f0403c86d53087ceca141295a00002e522cfabe6d6d7561cf262313da1144026c8f7a43e3899c44f6145f39a36507d36679a8b7006104000000000000000000000001c8704095000000001976a91480ad90d403581fa3bf46086a91b2d9d4125db6c188ac00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_COINBASE);
         let in0 = &tx.input[0];
         assert!(in0.is_coinbase());
         assert_eq!(in0.get_type().unwrap(), InputType::Coinbase);
@@ -1025,11 +999,7 @@ mod tests {
 
     #[test]
     fn coinbase_input_detection2() {
-        // mainnet 636339fdd992c5e0382e70523af25ef969c15c4d1697d293037079c72e3c87d4 coinbase @ 361582
-        // This is one of many coinbase transactions that would error with
-        // EarlyEndOfScript before.
-        let rawtx = hex::decode("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff11036e8405045583b024acec8dee00000efbffffffff01553d3b95000000001976a914ca6ecc7d4d671d8c5c964a48dbb0bc194407a30688ac00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_COINBASE_2);
         let in0 = &tx.input[0];
         assert!(in0.is_coinbase());
         assert_eq!(in0.get_type().unwrap(), InputType::Coinbase);
@@ -1037,9 +1007,7 @@ mod tests {
 
     #[test]
     fn p2trkp_input_detection() {
-        // signet 75a1a2488770ba0506b9899b1d03dc232f5b22f00dffc3ca3ea6640a53de8403
-        let rawtx = hex::decode("0200000000010232b1c6063448c8089d4e7a500399555daec6bc1f3fef281016518c1de3d154cb0000000000feffffff32b1c6063448c8089d4e7a500399555daec6bc1f3fef281016518c1de3d154cb0100000000feffffff02301b0f00000000002251204b03959143386c56a1646c9d1002314c6acecd79ee0f0976fb9fa0f1f0837b1be31f0000000000001600140af8bb24c9504e8740076bb07b755237d4af6e67014159f6076cc04503a9bc72f137aa4af523ab05f5805b5fcb9e0b0b0f258a86afd30c7298e11203f6f27a1408385ec5b9fc1d16be738d628a4aac62eef1cfdac10b0102473044022044d39c6b67334c5e1aa0be056b2200221f8ec84e7319ba1b1cbe6df4dc2f6b1d02207289dd7e3d362355f22ff1df76965391ccd9c4d529a216947d2434f16dfd9b7901210338008b55bf51d06440c64129665a56c2eb828fdad50cca74191d29f92475e962b5680000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2TRKP);
         let in0 = &tx.input[0];
         assert!(in0.is_p2trkp());
         assert_eq!(in0.get_type().unwrap(), InputType::P2trkp);
@@ -1049,9 +1017,7 @@ mod tests {
 
     #[test]
     fn p2trsp_input_detection() {
-        // signet 692937bb7864cfcce9f7a5171d6af3646bf479204ffb9356a0d6ce8a4a7952f1
-        let rawtx = hex::decode("02000000000101e1e91316b8780879bf5ac7559cbb3da5c65f19e57ed822615d832c53b2eeb5360000000000ffffffff01905f010000000000160014734e7298bfe985c5e0148a5a37179b66d9ad0b0804400d1e89bad817848056c3f32b4226f70946b84d358ff5a635b70f7ce40a43a94eba9b8ce213bc56d8ab6f9bb2f90d700cfed82fd93d91f41e7b3cf27c5b3ea77b20107661134f21fc7c02223d50ab9eb3600bc3ffc3712423a1e47bb1f9a9dbf55f45a8206c60f404f8167a38fc70eaf8aa17ac351023bef86bcb9d1086a19afe95bd533388204edfcf9dfe6c0b5c83d1ab3f78d1b39a46ebac6798e08e19761f5ed89ec83c10ac41c1f30544d6009c8d8d94f5d030b2e844b1a3ca036255161c479db1cca5b374dd1cc81451874bd9ebd4b6fd4bba1f84cdfb533c532365d22a0a702205ff658b17c900000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2TRSP);
         let in0 = &tx.input[0];
         assert!(in0.is_p2trsp());
         assert_eq!(in0.get_type().unwrap(), InputType::P2trsp);
@@ -1062,9 +1028,7 @@ mod tests {
 
     #[test]
     fn p2a_input_detection() {
-        // mainnet d7da3b5ae755793ff486896e82553d841043df393f09593ec38b807dd2959c45
-        let rawtx = hex::decode("020000000113c59a9590b576fbe82677888d9cea0639ffe077c6b42fb3599d3ad37cc6ef730000000000ffffffff010000000000000000056a032e2e2e00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2A);
         let in0 = &tx.input[0];
         assert!(in0.is_p2a());
         assert_eq!(in0.get_type().unwrap(), InputType::P2a);
@@ -1075,9 +1039,7 @@ mod tests {
 
     #[test]
     fn coinbase_witness_input_detection() {
-        // mainnet d229b92da09f3abac4f22ceee35e0e55fc43375a62cc575f445431340d9e1732 coinbase @ 668692
-        let rawtx = hex::decode("010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff5b0314340a41d806348bf412e341d806348bafbbed2f45324d2026204254432e544f502ffabe6d6d2c7a0f4d5f67376109bb4e6e78904381170ee6ee0715344da30602c49d869cf68000000000000000e60086988fb8000000000000ffffffff023e740b2c000000001976a9140b904a4a8590d0ccff680bb8adc4ae4fe49f890a88ac0000000000000000266a24aa21a9ed165dbbf9c556629ce3b8f2e748f7ca8372131ca6cf47e95736efd8f73dcea77d0120000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_COINBASE_WITNESS);
         let in0 = &tx.input[0];
         assert!(in0.is_coinbase_witness());
         assert_eq!(in0.get_type().unwrap(), InputType::CoinbaseWitness);
@@ -1085,9 +1047,7 @@ mod tests {
 
     #[test]
     fn non_der_sig_p2pkh_input_detection() {
-        // mainnet fb0a1d8d34fa5537e461ac384bac761125e1bfa7fec286fa72511240fa66864d
-        let rawtx = hex::decode("01000000012316aac445c13ff31af5f3d1e2cebcada83e54ba10d15e01f49ec28bddc285aa000000008e4b3048022200002b83d59c1d23c08efd82ee0662fec23309c3adbcbd1f0b8695378db4b14e736602220000334a96676e58b1bb01784cb7c556dd8ce1c220171904da22e18fe1e7d1510db5014104d0fe07ff74c9ef5b00fed1104fad43ecf72dbab9e60733e4f56eacf24b20cf3b8cd945bcabcc73ba0158bf9ce769d43e94bd58c5c7e331a188922b3fe9ca1f5affffffff01c0c62d00000000001976a9147a2a3b481ca80c4ba7939c54d9278e50189d94f988ac00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&rawtx).unwrap();
+        let tx = decode_tx(testdata::TX_P2PKH_LAX_DER);
         let in0 = &tx.input[0];
         assert!(in0.is_p2pkh(false).unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2pkhLaxDer);
