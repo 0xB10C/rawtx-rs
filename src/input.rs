@@ -472,28 +472,73 @@ impl InputTypeDetection for TxIn {
             } else if self.is_p2trsp() {
                 return Ok(InputType::P2trsp);
             }
+            return Ok(InputType::Unknown);
+        }
+
         // check for coinbase first as coinbases can have weird input scripts
         // which might cause an EarlyEndOfScript error in the other checks.
-        } else if self.is_coinbase() {
+        if self.is_coinbase() {
             return Ok(InputType::Coinbase);
-        } else if self.is_p2pkh(/* strict DER. */ true)? {
-            return Ok(InputType::P2pkh);
-        } else if self.is_p2pkh(/* strict DER. */ false)? {
-            return Ok(InputType::P2pkhLaxDer);
-        } else if self.is_p2sh()? {
-            return Ok(InputType::P2sh);
-        } else if self.is_p2pk(/* strict DER. */ true)? {
-            return Ok(InputType::P2pk);
-        } else if self.is_p2pk(/* strict DER. */ false)? {
-            return Ok(InputType::P2pkLaxDer);
-        } else if self.is_p2ms(/* strict DER. */ true)? {
-            return Ok(InputType::P2ms);
-        } else if self.is_p2ms(/* strict DER. */ false)? {
-            return Ok(InputType::P2msLaxDer);
-        } else if self.is_p2a() {
-            return Ok(InputType::P2a);
         }
-        Ok(InputType::Unknown)
+
+        if self.script_sig.is_empty() {
+            if self.is_p2a() {
+                return Ok(InputType::P2a);
+            }
+            return Ok(InputType::Unknown);
+        }
+
+        // Parse script_sig instructions once and classify from the result,
+        // avoiding redundant parsing in each is_p2* method.
+        let instructions = match crate::script::instructions_as_vec(&self.script_sig) {
+            Ok(ins) => ins,
+            Err(e) => return Err(InputError::TypeInfo(e)),
+        };
+
+        // P2PKH: [ <ECDSA Signature> <PublicKey> ]
+        if instructions.len() == 2 && instructions[1].is_pubkey() {
+            if instructions[0].is_ecdsa_signature(/* strict DER */ true) {
+                return Ok(InputType::P2pkh);
+            }
+            if instructions[0].is_ecdsa_signature(/* strict DER */ false) {
+                return Ok(InputType::P2pkhLaxDer);
+            }
+        }
+
+        // P2PK: [ <ECDSA Signature> ]
+        if instructions.len() == 1 {
+            if instructions[0].is_ecdsa_signature(/* strict DER */ true) {
+                return Ok(InputType::P2pk);
+            }
+            if instructions[0].is_ecdsa_signature(/* strict DER */ false) {
+                return Ok(InputType::P2pkLaxDer);
+            }
+        }
+
+        // P2MS: [ OP_0 <ECDSA Signature> (<ECDSA Signature>) (<ECDSA Signature>) ]
+        if instructions.len() >= 2 && instructions.len() <= 4 {
+            if let script::Instruction::PushBytes(bytes) = &instructions[0] {
+                if bytes.is_empty() {
+                    let sigs = &instructions[1..];
+                    if sigs
+                        .iter()
+                        .all(|i| i.is_ecdsa_signature(/* strict DER */ true))
+                    {
+                        return Ok(InputType::P2ms);
+                    }
+                    if sigs
+                        .iter()
+                        .all(|i| i.is_ecdsa_signature(/* strict DER */ false))
+                    {
+                        return Ok(InputType::P2msLaxDer);
+                    }
+                }
+            }
+        }
+
+        // P2SH: anything else with a non-empty script_sig and no witness
+        // (already ruled out P2PKH, P2PK, P2MS, coinbase above)
+        Ok(InputType::P2sh)
     }
 
     /// Indicates if the witness contains data.
