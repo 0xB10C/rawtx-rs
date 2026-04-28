@@ -449,8 +449,13 @@ impl SignatureInfo {
     /// the inputs script_sig and witness don't contain any signatures, an empty
     /// vector is returned.
     pub fn all_from(input: &bitcoin::TxIn) -> Result<Vec<SignatureInfo>, InputError> {
-        let input_type = input.get_type()?;
+        Self::all_from_with_type(input, input.get_type()?)
+    }
 
+    pub fn all_from_with_type(
+        input: &bitcoin::TxIn,
+        input_type: InputType,
+    ) -> Result<Vec<SignatureInfo>, InputError> {
         let mut signature_infos = vec![];
 
         match input_type {
@@ -490,14 +495,16 @@ impl SignatureInfo {
             InputType::P2shP2wpkh => {
                 // P2SH wrapped P2WPKH inputs contain the signature as the
                 // first element of the witness.
-                signature_infos
-                    .push(SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0]).unwrap());
+                signature_infos.push(
+                    SignatureInfo::from_u8_slice_ecdsa(input.witness.nth(0).unwrap()).unwrap(),
+                );
             }
             InputType::P2wpkh => {
                 // P2WPKH inputs contain the signature as the first element of
                 // the witness.
-                signature_infos
-                    .push(SignatureInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[0]).unwrap())
+                signature_infos.push(
+                    SignatureInfo::from_u8_slice_ecdsa(input.witness.nth(0).unwrap()).unwrap(),
+                )
             }
             InputType::P2sh => {
                 // P2SH inputs can contain zero or multiple signatures in
@@ -518,7 +525,7 @@ impl SignatureInfo {
                 // P2SH wrapped P2WSH inputs can contain zero or multiple signatures in
                 // the witness. It's very uncommon that signatures are placed
                 // in the witness (redeem) script.
-                for bytes in input.witness.to_vec()[..input.witness.len() - 1].iter() {
+                for bytes in input.witness.iter().take(input.witness.len() - 1) {
                     if let Some(signature_info) = SignatureInfo::from_u8_slice_ecdsa(bytes) {
                         signature_infos.push(signature_info);
                     }
@@ -528,7 +535,7 @@ impl SignatureInfo {
                 // P2WSH inputs can contain zero or multiple signatures in
                 // the witness. It's very uncommon that signatures are placed
                 // in the witness (redeem) script.
-                for bytes in input.witness.to_vec()[..input.witness.len() - 1].iter() {
+                for bytes in input.witness.iter().take(input.witness.len() - 1) {
                     if let Some(signature_info) = SignatureInfo::from_u8_slice_ecdsa(bytes) {
                         signature_infos.push(signature_info);
                     }
@@ -537,14 +544,15 @@ impl SignatureInfo {
             InputType::P2trkp => {
                 // P2TR key-path spends contain exactly one Schnorr signature in the
                 // witness.
-                signature_infos
-                    .push(SignatureInfo::from_u8_slice_schnorr(&input.witness.to_vec()[0]).unwrap())
+                signature_infos.push(
+                    SignatureInfo::from_u8_slice_schnorr(input.witness.nth(0).unwrap()).unwrap(),
+                )
             }
             InputType::P2trsp => {
                 // P2TR script-path spends contain zero or multiple signatures in the witness.
                 // There can't be any signatures in the annex, control block or script part.
                 // https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki#script-validation-rules
-                for bytes in input.witness.to_vec()[..input.witness.len() - 2].iter() {
+                for bytes in input.witness.iter().take(input.witness.len() - 2) {
                     if let Some(signature_info) = SignatureInfo::from_u8_slice_schnorr(bytes) {
                         signature_infos.push(signature_info);
                     }
@@ -696,8 +704,13 @@ impl PubKeyInfo {
     }
 
     pub fn from_input(input: &bitcoin::TxIn) -> Result<Vec<PubKeyInfo>, InputError> {
-        let input_type = input.get_type()?;
+        Self::from_input_with_type(input, input.get_type()?)
+    }
 
+    pub fn from_input_with_type(
+        input: &bitcoin::TxIn,
+        input_type: InputType,
+    ) -> Result<Vec<PubKeyInfo>, InputError> {
         let mut pubkey_infos = vec![];
 
         match input_type {
@@ -718,13 +731,13 @@ impl PubKeyInfo {
                 // P2SH wrapped P2WPKH inputs contain the signature as the first and
                 // the pubkey as the second element of the witness.
                 pubkey_infos
-                    .push(PubKeyInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[1]).unwrap());
+                    .push(PubKeyInfo::from_u8_slice_ecdsa(input.witness.nth(1).unwrap()).unwrap());
             }
             InputType::P2wpkh => {
                 // P2WPKH inputs contain the signature as the first and
                 // the pubkey as the second element of the witness.
                 pubkey_infos
-                    .push(PubKeyInfo::from_u8_slice_ecdsa(&input.witness.to_vec()[1]).unwrap())
+                    .push(PubKeyInfo::from_u8_slice_ecdsa(input.witness.nth(1).unwrap()).unwrap())
             }
             InputType::P2sh => {
                 // P2SH inputs usually contain public keys in the witness redeem script
