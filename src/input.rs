@@ -74,12 +74,13 @@ pub struct InputInfo {
 
 impl InputInfo {
     pub fn new(input: &TxIn) -> Result<InputInfo, InputError> {
+        let in_type = input.get_type()?;
         Ok(InputInfo {
             sequence: input.sequence,
-            in_type: input.get_type()?,
-            multisig_info: input.multisig_info()?,
-            signature_info: SignatureInfo::all_from(input)?,
-            pubkey_stats: PubKeyInfo::from_input(input)?,
+            multisig_info: input.multisig_info_with_type(in_type)?,
+            signature_info: SignatureInfo::all_from_with_type(input, in_type)?,
+            pubkey_stats: PubKeyInfo::from_input_with_type(input, in_type)?,
+            in_type,
         })
     }
 
@@ -218,13 +219,28 @@ pub struct MultisigInputInfo {
 
 pub trait InputMultisigDetection {
     fn multisig_info(&self) -> Result<Option<MultisigInputInfo>, InputError>;
+    fn multisig_info_with_type(
+        &self,
+        in_type: InputType,
+    ) -> Result<Option<MultisigInputInfo>, InputError>;
 }
 
 impl InputMultisigDetection for TxIn {
     /// Returns Some([MultisigInputInfo]) when the input detectably spends a
     /// multisig, If the multisig spend is not detected, None() is returned.
     fn multisig_info(&self) -> Result<Option<MultisigInputInfo>, InputError> {
-        if self.is_scripthash_input()? {
+        self.multisig_info_with_type(self.get_type()?)
+    }
+
+    fn multisig_info_with_type(
+        &self,
+        in_type: InputType,
+    ) -> Result<Option<MultisigInputInfo>, InputError> {
+        let is_scripthash = matches!(
+            in_type,
+            InputType::P2sh | InputType::P2shP2wsh | InputType::P2wsh
+        );
+        if is_scripthash {
             if let Ok(Some(redeemscript)) = self.redeem_script() {
                 if let Ok(Some(multisig)) = redeemscript.get_opcheckmultisig_n_m() {
                     return Ok(Some(MultisigInputInfo {
@@ -233,7 +249,7 @@ impl InputMultisigDetection for TxIn {
                     }));
                 }
             }
-        } else if self.get_type()? == InputType::P2ms {
+        } else if in_type == InputType::P2ms {
             if let Ok(instructions) = crate::script::instructions_as_vec(&self.script_sig) {
                 // P2MS sigscripts consist of an OP_0 followed by up to 3 ECDSA signatures.
                 let instructions_count = instructions.len();
