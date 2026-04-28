@@ -220,11 +220,7 @@ impl TxInfo {
         if !(self.input_infos.len() < 2 || self.output_infos.len() < 2) {
             let mut a: HashMap<Amount, usize> = HashMap::new();
             for amount in self.output_infos.iter().map(|o| o.value) {
-                if let Some(count) = a.clone().get(&amount) {
-                    a.insert(amount, *count + 1);
-                } else {
-                    a.insert(amount, 1);
-                }
+                *a.entry(amount).or_insert(0) += 1;
             }
 
             // a third of the outputs must have an equal-output-value
