@@ -50,6 +50,8 @@
 pub mod input;
 pub mod output;
 pub mod script;
+#[cfg(test)]
+pub mod testdata;
 pub mod tx;
 
 pub extern crate bitcoin;
