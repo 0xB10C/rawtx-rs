@@ -50,7 +50,7 @@
 pub mod input;
 pub mod output;
 pub mod script;
-#[cfg(test)]
+#[doc(hidden)]
 pub mod testdata;
 pub mod tx;
 

@@ -24,3 +24,7 @@ counterparty = [ "rc4" ]
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[[bench]]
+name = "txinfo"
+harness = false
