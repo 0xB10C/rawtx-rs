@@ -127,16 +127,6 @@ impl Signature for script::Instruction<'_> {
 
 impl Signature for [u8] {
     fn is_ecdsa_signature(&self, strict_der: bool) -> bool {
-        self.to_vec().is_ecdsa_signature(strict_der)
-    }
-
-    fn is_schnorr_signature(&self) -> bool {
-        self.to_vec().is_schnorr_signature()
-    }
-}
-
-impl Signature for Vec<u8> {
-    fn is_ecdsa_signature(&self, strict_der: bool) -> bool {
         if self.len() < ECDSA_SIG_MIN_LEN
             || ((strict_der && self.len() > ECDSA_SIG_MAX_STRICT_DER_LEN)
                 || self.len() > ECDSA_SIG_MAX_LAX_DER_LEN)
@@ -157,15 +147,25 @@ impl Signature for Vec<u8> {
             // As long as we see excatly 64 bytes here, we assume it's a Schnoor signature.
             return true;
         } else if self.len() == 65 {
-            let sighash = self.last().unwrap();
-            return *sighash == 0x01u8
-                || *sighash == 0x02u8
-                || *sighash == 0x03u8
-                || *sighash == 0x81u8
-                || *sighash == 0x82u8
-                || *sighash == 0x83u8;
+            let sighash = self[self.len() - 1];
+            return sighash == 0x01u8
+                || sighash == 0x02u8
+                || sighash == 0x03u8
+                || sighash == 0x81u8
+                || sighash == 0x82u8
+                || sighash == 0x83u8;
         }
         false
+    }
+}
+
+impl Signature for Vec<u8> {
+    fn is_ecdsa_signature(&self, strict_der: bool) -> bool {
+        self.as_slice().is_ecdsa_signature(strict_der)
+    }
+
+    fn is_schnorr_signature(&self) -> bool {
+        self.as_slice().is_schnorr_signature()
     }
 }
 
@@ -419,7 +419,7 @@ impl SignatureInfo {
     /// Returns Some(SignatureInfo) if the Instruction is a Bitcoin Schnorr Signature,
     /// otherwise None is returned.
     pub fn from_u8_slice_schnorr(bytes: &[u8]) -> Option<SignatureInfo> {
-        if bytes.to_vec().is_schnorr_signature() {
+        if bytes.is_schnorr_signature() {
             let sighash: u8;
             let signature: schnorr::Signature = if bytes.len() == 64 {
                 sighash = 0x01u8;
