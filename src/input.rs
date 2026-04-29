@@ -241,7 +241,7 @@ impl InputMultisigDetection for TxIn {
             InputType::P2sh | InputType::P2shP2wsh | InputType::P2wsh
         );
         if is_scripthash {
-            if let Ok(Some(redeemscript)) = self.redeem_script() {
+            if let Ok(Some(redeemscript)) = self.redeem_script_with_type(in_type) {
                 if let Ok(Some(multisig)) = redeemscript.get_opcheckmultisig_n_m() {
                     return Ok(Some(MultisigInputInfo {
                         m_of_n: multisig,
@@ -311,17 +311,24 @@ impl InputSigops for TxIn {
 
 pub trait ScriptHashInput {
     fn redeem_script(&self) -> Result<Option<bitcoin::ScriptBuf>, InputError>;
+    fn redeem_script_with_type(
+        &self,
+        in_type: InputType,
+    ) -> Result<Option<bitcoin::ScriptBuf>, InputError>;
 }
 
 impl ScriptHashInput for TxIn {
     /// Returns the redeem script of the input. The caller must make sure the
     /// input is script hash based, otherwise None is returned.
     fn redeem_script(&self) -> Result<Option<bitcoin::ScriptBuf>, InputError> {
-        if !self.is_scripthash_input()? {
-            return Ok(None);
-        }
+        self.redeem_script_with_type(self.get_type()?)
+    }
 
-        match self.get_type()? {
+    fn redeem_script_with_type(
+        &self,
+        in_type: InputType,
+    ) -> Result<Option<bitcoin::ScriptBuf>, InputError> {
+        match in_type {
             InputType::P2sh => {
                 // redeem script is the last element of the script sig
                 if let Some(instruction_result) = self.script_sig.instructions().last() {
@@ -337,14 +344,7 @@ impl ScriptHashInput for TxIn {
                 }
                 Ok(None)
             }
-            InputType::P2shP2wsh => {
-                // redeem script is the last element of the witness
-                if let Some(bytes) = self.witness.last() {
-                    return Ok(Some(bitcoin::ScriptBuf::from(bytes.to_vec())));
-                }
-                Ok(None)
-            }
-            InputType::P2wsh => {
+            InputType::P2shP2wsh | InputType::P2wsh => {
                 // redeem script is the last element of the witness
                 if let Some(bytes) = self.witness.last() {
                     return Ok(Some(bitcoin::ScriptBuf::from(bytes.to_vec())));

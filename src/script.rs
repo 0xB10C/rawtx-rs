@@ -739,39 +739,9 @@ impl PubKeyInfo {
                 pubkey_infos
                     .push(PubKeyInfo::from_u8_slice_ecdsa(input.witness.nth(1).unwrap()).unwrap())
             }
-            InputType::P2sh => {
-                // P2SH inputs usually contain public keys in the witness redeem script
-                if let Some(redeem_script) = input.redeem_script().unwrap() {
-                    // If we can't parse the the script, we assume there are no pubkeys in there..
-                    if let Ok(instructions) = instructions_as_vec(&redeem_script) {
-                        for instruction in instructions.iter() {
-                            if let Some(pubkey_info) =
-                                PubKeyInfo::from_instruction_ecdsa(instruction)
-                            {
-                                pubkey_infos.push(pubkey_info);
-                            }
-                        }
-                    }
-                }
-            }
-            InputType::P2shP2wsh => {
-                // P2SH wrapped P2WSH inputs usually contain public keys in the witness redeem script
-                if let Some(redeem_script) = input.redeem_script().unwrap() {
-                    // If we can't parse the the script, we assume there are no pubkeys in there..
-                    if let Ok(instructions) = instructions_as_vec(&redeem_script) {
-                        for instruction in instructions.iter() {
-                            if let Some(pubkey_info) =
-                                PubKeyInfo::from_instruction_ecdsa(instruction)
-                            {
-                                pubkey_infos.push(pubkey_info);
-                            }
-                        }
-                    }
-                }
-            }
-            InputType::P2wsh => {
-                // P2WSH inputs usually contain public keys in the witness redeem script
-                if let Some(redeem_script) = input.redeem_script().unwrap() {
+            InputType::P2sh | InputType::P2shP2wsh | InputType::P2wsh => {
+                // Script-hash inputs usually contain public keys in the redeem script
+                if let Some(redeem_script) = input.redeem_script_with_type(input_type).unwrap() {
                     // If we can't parse the the script, we assume there are no pubkeys in there..
                     if let Ok(instructions) = instructions_as_vec(&redeem_script) {
                         for instruction in instructions.iter() {
