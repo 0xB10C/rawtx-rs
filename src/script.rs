@@ -771,8 +771,13 @@ impl PubKeyInfo {
     }
 
     pub fn from_output(output: &bitcoin::TxOut) -> Result<Vec<PubKeyInfo>, OutputError> {
-        let output_type = output.get_type();
+        Self::from_output_with_type(output, output.get_type())
+    }
 
+    pub fn from_output_with_type(
+        output: &bitcoin::TxOut,
+        output_type: OutputType,
+    ) -> Result<Vec<PubKeyInfo>, OutputError> {
         let mut pubkey_infos = vec![];
 
         match output_type {

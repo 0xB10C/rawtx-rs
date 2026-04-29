@@ -36,10 +36,11 @@ pub struct OutputInfo {
 
 impl OutputInfo {
     pub fn new(output: &TxOut) -> Result<OutputInfo, OutputError> {
+        let out_type = output.get_type();
         Ok(OutputInfo {
-            out_type: output.get_type(),
             value: Amount::from_sat(output.value.to_sat()),
-            pubkey_stats: PubKeyInfo::from_output(output)?,
+            pubkey_stats: PubKeyInfo::from_output_with_type(output, out_type)?,
+            out_type,
         })
     }
 
