@@ -797,16 +797,10 @@ impl InputTypeDetection for TxIn {
         if !self.script_sig.is_empty() || !self.has_witness() || self.witness.len() > 2 {
             return false;
         }
-        if self.witness.len() == 1 {
-            // without annex
+        if self.witness.len() == 1 || self.witness.taproot_annex().is_some() {
             return self.witness.nth(0).unwrap().is_schnorr_signature();
-        } else if self.witness.len() == 2 {
-            // with annex
-            let second = self.witness.nth(1).unwrap();
-            if !second.is_empty() && second[0] == TAPROOT_ANNEX_INDICATOR {
-                return self.witness.nth(0).unwrap().is_schnorr_signature();
-            }
         }
+
         false
     }
 
@@ -821,17 +815,10 @@ impl InputTypeDetection for TxIn {
             return false;
         }
 
-        let last_witness_element_index = self.witness.len() - 1;
-        let mut control_block_index = last_witness_element_index;
-
-        // check for annex
-        let last_element = self.witness.nth(last_witness_element_index).unwrap();
-        if !last_element.is_empty() && last_element[0] == TAPROOT_ANNEX_INDICATOR {
-            control_block_index -= 1;
-        }
-
-        // check for control block
-        let control_block = self.witness.nth(control_block_index).unwrap();
+        let control_block = match self.witness.taproot_control_block() {
+            Some(control_block) => control_block,
+            None => return false,
+        };
         if control_block.len() < 1 + 32 || !(control_block.len() - 1).is_multiple_of(32) {
             return false;
         }
@@ -1069,6 +1056,49 @@ mod tests {
         assert_eq!(in0.get_type().unwrap(), InputType::P2trkp);
         assert!(InputInfo::new(in0).unwrap().is_spending_taproot());
         assert!(InputInfo::new(in0).unwrap().is_spending_segwit());
+    }
+
+    #[test]
+    fn p2trkp_input_detection_with_annex() {
+        use bitcoin::{OutPoint, ScriptBuf, Sequence, TxIn, Witness};
+
+        let sig = vec![0u8; 64];
+        let annex = vec![0x50u8, 0x00u8];
+        let witness = Witness::from_slice(&[sig.as_slice(), annex.as_slice()]);
+        let txin = TxIn {
+            previous_output: OutPoint::new(
+                bitcoin::Txid::from_raw_hash(bitcoin::hashes::Hash::from_byte_array([1u8; 32])),
+                0,
+            ),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness,
+        };
+
+        assert!(txin.is_p2trkp());
+        assert_eq!(txin.get_type().unwrap(), InputType::P2trkp);
+    }
+
+    #[test]
+    fn p2trsp_input_detection_rejects_two_item_annex() {
+        use bitcoin::{OutPoint, ScriptBuf, Sequence, TxIn, Witness};
+
+        let mut control_block = vec![0xc0u8];
+        control_block.extend_from_slice(&[0u8; 32]);
+        let annex = vec![0x50u8, 0x00u8];
+        let witness = Witness::from_slice(&[control_block.as_slice(), annex.as_slice()]);
+        let txin = TxIn {
+            previous_output: OutPoint::new(
+                bitcoin::Txid::from_raw_hash(bitcoin::hashes::Hash::from_byte_array([1u8; 32])),
+                0,
+            ),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness,
+        };
+
+        assert!(!txin.is_p2trsp());
+        assert_ne!(txin.get_type().unwrap(), InputType::P2trsp);
     }
 
     #[test]
