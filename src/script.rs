@@ -544,7 +544,16 @@ impl SignatureInfo {
                 // P2TR script-path spends contain zero or multiple signatures in the witness.
                 // There can't be any signatures in the annex, control block or script part.
                 // https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki#script-validation-rules
-                for bytes in input.witness.to_vec()[..input.witness.len() - 2].iter() {
+                //
+                // Drop the script + control block, plus the annex when present.
+                let to_drop = if input.witness.taproot_annex().is_some() {
+                    3
+                } else {
+                    2
+                };
+                let witness_vec = input.witness.to_vec();
+                let stack_end = witness_vec.len() - to_drop;
+                for bytes in witness_vec[..stack_end].iter() {
                     if let Some(signature_info) = SignatureInfo::from_u8_slice_schnorr(bytes) {
                         signature_infos.push(signature_info);
                     }
@@ -1222,5 +1231,48 @@ mod tests {
             assert!(s.is_ecdsa_signature(testcase.der_encoded == DEREncoding::Valid));
             assert!(!s.is_schnorr_signature());
         }
+    }
+
+    /// Regression test: P2TR script-path spends with an annex must skip the
+    /// annex *and* the script when collecting signatures. Slicing
+    /// `witness[..len-2]` unconditionally would include the script item,
+    /// which can be miscounted as a Schnorr signature when its serialised
+    /// length happens to be 64 or 65 bytes.
+    #[test]
+    fn signature_info_all_from_p2trsp_with_annex() {
+        use crate::input::InputTypeDetection;
+        use bitcoin::{OutPoint, Sequence, TxIn, Witness};
+
+        // Witness layout: [ sig, script (64 bytes), control_block, annex ]
+        let sig = vec![0u8; 64];
+        let script = vec![0u8; 64];
+        let mut control_block = vec![0xc0u8];
+        control_block.extend_from_slice(&[0u8; 32]);
+        let annex = vec![0x50u8, 0x00u8];
+
+        let witness = Witness::from_slice(&[
+            sig.as_slice(),
+            script.as_slice(),
+            control_block.as_slice(),
+            annex.as_slice(),
+        ]);
+
+        let txin = TxIn {
+            previous_output: OutPoint::new(
+                bitcoin::Txid::from_raw_hash(bitcoin::hashes::Hash::from_byte_array([1u8; 32])),
+                0,
+            ),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness,
+        };
+
+        assert_eq!(txin.get_type().unwrap(), crate::input::InputType::P2trsp);
+        let sigs = super::SignatureInfo::all_from(&txin).unwrap();
+        assert_eq!(
+            sigs.len(),
+            1,
+            "annex must be excluded; only the actual signature should be counted"
+        );
     }
 }
