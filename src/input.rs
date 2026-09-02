@@ -68,6 +68,9 @@ pub struct InputInfo {
     pub multisig_info: Option<MultisigInputInfo>,
     pub signature_info: Vec<SignatureInfo>,
     pub pubkey_stats: Vec<PubKeyInfo>,
+    /// Number of sigops this input contributes to the block sigop limit. Sigops
+    /// in legacy and P2SH scripts are scaled by a factor of four.
+    pub sigops: usize,
     // TODO: OpCodes vec?
     // TODO: is_ln_unilateral_closing: bool,
 }
@@ -80,6 +83,7 @@ impl InputInfo {
             multisig_info: input.multisig_info_with_type(in_type)?,
             signature_info: SignatureInfo::all_from_with_type(input, in_type)?,
             pubkey_stats: PubKeyInfo::from_input_with_type(input, in_type)?,
+            sigops: input.sigops_with_type(in_type)?,
             in_type,
         })
     }
@@ -266,35 +270,42 @@ impl InputMultisigDetection for TxIn {
 
 pub trait InputSigops {
     fn sigops(&self) -> Result<usize, InputError>;
+    fn sigops_with_type(&self, in_type: InputType) -> Result<usize, InputError>;
 }
 
 impl InputSigops for TxIn {
     fn sigops(&self) -> Result<usize, InputError> {
+        self.sigops_with_type(self.get_type()?)
+    }
+
+    /// Counts the sigops of an input with an already known [InputType]. Callers
+    /// that built an [InputInfo] should use this to avoid re-running the
+    /// comparatively expensive input type detection.
+    fn sigops_with_type(&self, in_type: InputType) -> Result<usize, InputError> {
         const SIGOPS_SCALE_FACTOR: usize = 4;
-        let mut sigops: usize = 0;
 
         // in P2TR and P2A scripts and coinbase inputs, no sigops are counted
-        if self.is_p2a()
-            || self.is_p2trkp()
-            || self.is_p2trsp()
-            || self.is_coinbase()
-            || self.is_coinbase_witness()
-        {
-            return Ok(0);
+        match in_type {
+            InputType::P2a
+            | InputType::P2trkp
+            | InputType::P2trsp
+            | InputType::Coinbase
+            | InputType::CoinbaseWitness => return Ok(0),
+            _ => (),
         }
 
         // While very very seldom, there can be sigops in the inputs script_sig
-        sigops += SIGOPS_SCALE_FACTOR * self.script_sig.count_sigops_legacy();
+        let mut sigops: usize = SIGOPS_SCALE_FACTOR * self.script_sig.count_sigops_legacy();
 
-        match self.get_type()? {
+        match in_type {
             // sigops in P2SH redeem scripts (pre SegWit) are scaled by 4
             InputType::P2sh => {
-                if let Some(redeem_script) = self.redeem_script()? {
+                if let Some(redeem_script) = self.redeem_script_with_type(in_type)? {
                     sigops += SIGOPS_SCALE_FACTOR * redeem_script.count_sigops();
                 }
             }
             InputType::P2shP2wsh | InputType::P2wsh => {
-                if let Some(redeem_script) = self.redeem_script()? {
+                if let Some(redeem_script) = self.redeem_script_with_type(in_type)? {
                     sigops += redeem_script.count_sigops();
                 }
             }

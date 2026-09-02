@@ -106,6 +106,17 @@ impl TxInfo {
         })
     }
 
+    /// Number of sigops of the transaction. Sigops in legacy and P2SH scripts
+    /// are scaled by a factor of four.
+    ///
+    /// These are counted while the inputs and outputs are processed in
+    /// [TxInfo::new]. Prefer this over [TransactionSigops::sigops] on the
+    /// [Transaction], which has to re-run input and output type detection.
+    pub fn sigops(&self) -> usize {
+        self.input_infos.iter().map(|i| i.sigops).sum::<usize>()
+            + self.output_infos.iter().map(|o| o.sigops).sum::<usize>()
+    }
+
     /// Number of non-OP_RETURN outputs minus one change output if there is more than one
     /// non-OP_RETURN output. This should approximate the number of real-world "payments"
     /// happening in this transaction. However, we don't actually know if a certain transaction
@@ -500,6 +511,26 @@ mod tests {
         for (sigops, rawtx) in tx_sigops_pairs.iter() {
             let tx = decode_tx(rawtx);
             assert_eq!(*sigops, tx.sigops().unwrap());
+            // TxInfo counts the sigops while it processes the inputs and
+            // outputs. It must agree with the standalone counting above.
+            assert_eq!(*sigops, TxInfo::new(&tx).unwrap().sigops());
+        }
+    }
+
+    /// The sigops counted during TxInfo::new() (which reuses the already
+    /// detected input and output types) must match the standalone sigops
+    /// counting (which detects the types itself) for all test transactions.
+    #[test]
+    fn test_txinfo_sigops_matches_transaction_sigops() {
+        for rawtx in testdata::ALL_TRANSACTIONS.iter() {
+            let tx = decode_tx(rawtx);
+            let tx_info = TxInfo::new(&tx).unwrap();
+            assert_eq!(
+                tx.sigops().unwrap(),
+                tx_info.sigops(),
+                "sigops mismatch for {}",
+                tx_info.txid
+            );
         }
     }
 

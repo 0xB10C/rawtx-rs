@@ -1,7 +1,7 @@
 use bitcoin::Transaction;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rawtx_rs::testdata;
-use rawtx_rs::tx::TxInfo;
+use rawtx_rs::tx::{TransactionSigops, TxInfo};
 use std::hint::black_box;
 
 fn decode_tx(hex: &str) -> Transaction {
@@ -126,5 +126,64 @@ fn bench_txinfo_methods(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_txinfo_new, bench_txinfo_methods);
+/// Compares counting sigops standalone (via [TransactionSigops], which has to
+/// run input and output type detection itself) with counting them as part of
+/// building a [TxInfo] (where the types are already known).
+fn bench_sigops(c: &mut Criterion) {
+    let cases: Vec<(&str, &str)> = vec![
+        ("p2pkh", testdata::TX_P2PKH),
+        ("p2sh", testdata::TX_P2SH),
+        ("p2sh_rsk", testdata::TX_P2SH_RSK),
+        ("p2sh_p2wsh", testdata::TX_P2SH_P2WSH),
+        ("p2wpkh", testdata::TX_P2WPKH),
+        ("p2wsh", testdata::TX_P2WSH),
+        ("p2tr_keypath", testdata::TX_P2TRKP),
+        ("p2tr_scriptpath", testdata::TX_P2TRSP),
+        ("p2ms_2of3", testdata::TX_P2MS_2OF3),
+        ("coinbase", testdata::TX_COINBASE),
+        ("sigops_86", testdata::TX_SIGOPS_86),
+    ];
+
+    // sigops counted standalone, without a TxInfo
+    let mut group = c.benchmark_group("sigops_standalone");
+    for (name, hex) in &cases {
+        let tx = decode_tx(hex);
+        group.bench_function(*name, |b| {
+            b.iter(|| black_box(&tx).sigops().unwrap());
+        });
+    }
+    group.finish();
+
+    // building a TxInfo and reading the sigops it counted along the way
+    let mut group = c.benchmark_group("sigops_via_txinfo");
+    for (name, hex) in &cases {
+        let tx = decode_tx(hex);
+        group.bench_function(*name, |b| {
+            b.iter(|| TxInfo::new(black_box(&tx)).unwrap().sigops());
+        });
+    }
+    group.finish();
+
+    // building a TxInfo and then counting the sigops standalone. This is what
+    // callers had to do before TxInfo counted sigops itself.
+    let mut group = c.benchmark_group("sigops_txinfo_and_standalone");
+    for (name, hex) in &cases {
+        let tx = decode_tx(hex);
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                let info = TxInfo::new(black_box(&tx)).unwrap();
+                black_box(info);
+                black_box(&tx).sigops().unwrap()
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_txinfo_new,
+    bench_txinfo_methods,
+    bench_sigops
+);
 criterion_main!(benches);

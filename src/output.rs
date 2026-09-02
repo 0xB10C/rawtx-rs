@@ -32,6 +32,9 @@ pub struct OutputInfo {
     pub out_type: OutputType,
     pub value: Amount,
     pub pubkey_stats: Vec<PubKeyInfo>,
+    /// Number of sigops this output contributes to the block sigop limit. These
+    /// are scaled by a factor of four.
+    pub sigops: usize,
 }
 
 impl OutputInfo {
@@ -40,6 +43,7 @@ impl OutputInfo {
         Ok(OutputInfo {
             value: Amount::from_sat(output.value.to_sat()),
             pubkey_stats: PubKeyInfo::from_output_with_type(output, out_type)?,
+            sigops: output.sigops_with_type(out_type),
             out_type,
         })
     }
@@ -507,20 +511,34 @@ impl OutputTypeDetection for TxOut {
     }
 }
 
+/// Sigops in legacy scripts are scaled by a factor of four.
+const SIGOPS_SCALE_FACTOR: usize = 4;
+
 pub trait OutputSigops {
     fn sigops(&self) -> usize;
+    fn sigops_with_type(&self, out_type: OutputType) -> usize;
 }
 
 impl OutputSigops for TxOut {
     fn sigops(&self) -> usize {
-        const SIGOPS_SCALE_FACTOR: usize = 4;
-
         // in P2TR scripts, no sigops are counted
         if self.is_p2tr() {
             return 0;
         }
 
         // for example, for P2MS script_pubkeys (OP_CHECKMUTLISIG)
+        SIGOPS_SCALE_FACTOR * self.script_pubkey.count_sigops_legacy()
+    }
+
+    /// Counts the sigops of an output with an already known [OutputType].
+    /// Callers that built an [OutputInfo] should use this to avoid re-running
+    /// the output type detection.
+    fn sigops_with_type(&self, out_type: OutputType) -> usize {
+        // in P2TR scripts, no sigops are counted
+        if out_type == OutputType::P2tr {
+            return 0;
+        }
+
         SIGOPS_SCALE_FACTOR * self.script_pubkey.count_sigops_legacy()
     }
 }
