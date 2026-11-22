@@ -898,8 +898,8 @@ mod tests {
     use super::opcodes;
     use super::{
         InputError, InputInfo, InputInscriptionDetection, InputMultisigDetection, InputSigops,
-        InputType, InputTypeDetection, MultisigInputInfo, TAPROOT_ANNEX_INDICATOR,
-        TAPROOT_LEAF_TAPSCRIPT,
+        InputType, InputTypeDetection, MultisigInputInfo, ORDINALS_INSCRIPTION_MARKER,
+        TAPROOT_ANNEX_INDICATOR, TAPROOT_LEAF_TAPSCRIPT,
     };
     use crate::testdata;
     use bitcoin::blockdata::script;
@@ -1810,6 +1810,81 @@ mod tests {
 
         // an input without a witness
         assert!(!first_input(testdata::TX_P2A).is_p2trsp());
+    }
+
+    /// A taproot script-path input revealing the given tapscript.
+    fn tapscript_input(tapscript: bitcoin::ScriptBuf) -> bitcoin::TxIn {
+        let mut control_block = vec![0u8; 33];
+        control_block[0] = TAPROOT_LEAF_TAPSCRIPT;
+        let input = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[vec![0x11; 64], tapscript.into_bytes(), control_block],
+        );
+        assert!(input.is_p2trsp());
+        input
+    }
+
+    #[test]
+    fn inscription_detection_near_misses() {
+        // an OP_0 followed by an OP_IF and the "ord" marker reveals an
+        // inscription
+        let reveal = script::Builder::new()
+            .push_opcode(opcodes::OP_PUSHBYTES_0)
+            .push_opcode(opcodes::OP_IF)
+            .push_slice(ORDINALS_INSCRIPTION_MARKER)
+            .into_script();
+        assert!(tapscript_input(reveal).reveals_inscription().unwrap());
+
+        // the pattern is also found further into the script
+        let later = script::Builder::new()
+            .push_opcode(opcodes::OP_NOP)
+            .push_opcode(opcodes::OP_PUSHBYTES_0)
+            .push_opcode(opcodes::OP_IF)
+            .push_slice(ORDINALS_INSCRIPTION_MARKER)
+            .into_script();
+        assert!(tapscript_input(later).reveals_inscription().unwrap());
+
+        // a marker with a different third byte
+        let other_marker = script::Builder::new()
+            .push_opcode(opcodes::OP_PUSHBYTES_0)
+            .push_opcode(opcodes::OP_IF)
+            .push_slice(*b"orc")
+            .into_script();
+        assert!(!tapscript_input(other_marker).reveals_inscription().unwrap());
+
+        // another opcode in place of the OP_IF
+        let other_opcode = script::Builder::new()
+            .push_opcode(opcodes::OP_PUSHBYTES_0)
+            .push_opcode(opcodes::OP_ELSE)
+            .push_slice(ORDINALS_INSCRIPTION_MARKER)
+            .into_script();
+        assert!(!tapscript_input(other_opcode).reveals_inscription().unwrap());
+
+        // the push in front of the OP_IF must be empty
+        let other_push = script::Builder::new()
+            .push_opcode(opcodes::OP_PUSHNUM_1)
+            .push_opcode(opcodes::OP_IF)
+            .push_slice(ORDINALS_INSCRIPTION_MARKER)
+            .into_script();
+        assert!(!tapscript_input(other_push).reveals_inscription().unwrap());
+
+        // the script ends before the marker
+        let cut_short = script::Builder::new()
+            .push_opcode(opcodes::OP_PUSHBYTES_0)
+            .push_opcode(opcodes::OP_IF)
+            .into_script();
+        assert!(!tapscript_input(cut_short).reveals_inscription().unwrap());
+
+        // an OP_0 on its own
+        let only_op_0 = script::Builder::new()
+            .push_opcode(opcodes::OP_PUSHBYTES_0)
+            .into_script();
+        assert!(!tapscript_input(only_op_0).reveals_inscription().unwrap());
+
+        // a key-path spend has no tapscript to inspect
+        assert!(!first_input(testdata::TX_P2TRKP)
+            .reveals_inscription()
+            .unwrap());
     }
 
     #[test]
