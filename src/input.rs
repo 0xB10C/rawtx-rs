@@ -1888,6 +1888,35 @@ mod tests {
     }
 
     #[test]
+    fn lax_der_input_types() {
+        let lax_signature = script_sig_pushes(testdata::TX_P2PKH_LAX_DER)[0].clone();
+
+        let p2pk = input_with(push_script(std::slice::from_ref(&lax_signature)), &[]);
+        assert_eq!(p2pk.get_type().unwrap(), InputType::P2pkLaxDer);
+
+        let p2ms = input_with(push_script(&[Vec::new(), lax_signature]), &[]);
+        assert_eq!(p2ms.get_type().unwrap(), InputType::P2msLaxDer);
+    }
+
+    #[test]
+    fn unknown_input_type_is_reported_as_a_legacy_spend() {
+        // a witness together with a script_sig that matches none of the known
+        // nested SegWit shapes
+        let input = input_with(push_script(&[vec![0x11; 4]]), &[vec![0x11; 20]]);
+        assert_eq!(input.get_type().unwrap(), InputType::Unknown);
+        assert!(!input.is_scripthash_input().unwrap());
+
+        let info = InputInfo::new(&input).unwrap();
+        assert!(!info.is_spending_segwit());
+        assert!(!info.is_spending_taproot());
+        assert!(!info.is_spending_nested_segwit());
+        assert!(!info.is_spending_native_segwit());
+        assert!(!info.is_spending_multisig());
+        // unknown inputs are counted as legacy spends
+        assert!(info.is_spending_legacy());
+    }
+
+    #[test]
     fn coinbase_inputs_count_their_script_sig_sigops() {
         // this coinbase has one signature operation in its script_sig, which
         // counts as a legacy sigop and is therefore scaled by four
