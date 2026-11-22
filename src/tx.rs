@@ -18,6 +18,8 @@ use crate::output::OutputTypeDetection;
 #[cfg(feature = "counterparty")]
 use crate::script::{instructions_as_vec, Multisig};
 #[cfg(feature = "counterparty")]
+use bitcoin::blockdata::opcodes::all as opcodes;
+#[cfg(feature = "counterparty")]
 use bitcoin::blockdata::script::Instruction;
 #[cfg(feature = "counterparty")]
 use rc4::{consts::U32, Key, KeyInit, Rc4, StreamCipher};
@@ -323,9 +325,32 @@ pub fn is_opreturn_counterparty(tx: &Transaction) -> bool {
     // find OP_RETURN output
     for output in tx.output.iter() {
         if output.script_pubkey.is_op_return() {
-            // check if OP_RETRUN message is long enough
-            if output.script_pubkey.len() > 1 + 1 + 8 {
-                // OP_RETURN + length + CNTRPRTY prefix
+            // expected: OP_RETURN <data push>
+            // The data push can use a OP_PUSHBYTES_X opcode or, for pushes of
+            // more than 75 bytes, a OP_PUSHDATA1 followed by a length byte.
+            // Parsing the script gives us the pushed bytes in both cases.
+            let instructions = match instructions_as_vec(&output.script_pubkey) {
+                Ok(instructions) => instructions,
+                Err(_) => return false,
+            };
+
+            if instructions.len() != 2 {
+                return false;
+            }
+
+            match instructions[0] {
+                Instruction::Op(op) if op == opcodes::OP_RETURN => (),
+                _ => return false,
+            }
+
+            let pushed_bytes = match instructions[1] {
+                Instruction::PushBytes(bytes) => bytes.as_bytes(),
+                Instruction::Op(_) => return false,
+            };
+
+            // check if the OP_RETRUN message is long enough to hold the
+            // CNTRPRTY prefix
+            if pushed_bytes.len() > 8 {
                 let first_input = match tx.input.first() {
                     Some(input) => input,
                     None => return false,
@@ -337,9 +362,7 @@ pub fn is_opreturn_counterparty(tx: &Transaction) -> bool {
                 first_outpoint_txid.reverse();
                 let key = Key::<U32>::from_slice(&first_outpoint_txid);
 
-                // expected: OP_RETURN PUSH_DATA <payload>
-                // drop the OP_RETURN and PUSH_DATA here
-                let mut payload = output.script_pubkey.clone().as_bytes()[2..].to_vec();
+                let mut payload = pushed_bytes.to_vec();
 
                 // decrypt the payload with the txid as key
                 let mut rc4 = Rc4::new(key);
@@ -585,6 +608,78 @@ mod tests {
         let raw_tx = hex::decode("01000000011378419519eebd4034e6eae696e98eee4f247f2103394740844a1cc5462fa465010000006b483045022100f592b2df2e8b9dcf6bc77bd0e8cc1064b74c6119cfb3482f96d03d1442d60f82022040372b55fd7aba6d7474ddce7e6d6a7b9219018e925e31379d06f4216104e51e0121021f6dc395418fed2bce5eb47485b2945e3681ba0a690c57779b09f4b15cb66afbffffffff020000000000000000386a36a61966fd345606c378b4ccd3596ab28200b3cb90398c0babbd1ef635a6dfd106e89794feae9a58d7700e6d3b41782e2181118a94eb9117390000000000001976a914bcb7dadb45b78b33653d38789ac14d54dff6de1388ac00000000").unwrap();
         let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
         assert!(is_opreturn_counterparty(&tx));
+    }
+
+    /// Builds a transaction with a single OP_RETURN output carrying the given
+    /// plaintext, encrypted the way CounterParty does it: RC4 with the human
+    /// readable (block-explorer) representation of the first input's outpoint
+    /// txid as key.
+    #[cfg(feature = "counterparty")]
+    fn counterparty_opreturn_tx(plaintext: &[u8]) -> Transaction {
+        use bitcoin::absolute::LockTime;
+        use bitcoin::blockdata::opcodes::all::OP_RETURN;
+        use bitcoin::blockdata::transaction::Version;
+        use bitcoin::hashes::Hash;
+        use bitcoin::script::{Builder, PushBytesBuf};
+        use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Txid, Witness};
+        use rc4::{consts::U32, Key, KeyInit, Rc4, StreamCipher};
+        use std::convert::TryFrom;
+
+        let txid = Txid::from_byte_array([0x11; 32]);
+        let mut key_bytes = txid.to_byte_array();
+        key_bytes.reverse();
+        let key = Key::<U32>::from_slice(&key_bytes);
+
+        let mut payload = plaintext.to_vec();
+        let mut rc4 = Rc4::new(key);
+        rc4.apply_keystream(&mut payload);
+
+        Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint { txid, vout: 0 },
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: Builder::new()
+                    .push_opcode(OP_RETURN)
+                    .push_slice(PushBytesBuf::try_from(payload).unwrap())
+                    .into_script(),
+            }],
+        }
+    }
+
+    /// CounterParty allows up to 80 bytes of OP_RETURN data. Pushes of more
+    /// than 75 bytes use OP_PUSHDATA1, which needs an extra length byte in the
+    /// script.
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_opreturn_counterparty_payload_lengths() {
+        const CNTRPRTY: [u8; 8] = [0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59];
+
+        // 80 bytes of data, pushed with OP_PUSHDATA1
+        let mut plaintext = CNTRPRTY.to_vec();
+        plaintext.extend_from_slice(&[0x42; 72]);
+        assert_eq!(plaintext.len(), 80);
+        let tx = counterparty_opreturn_tx(&plaintext);
+        assert_eq!(tx.output[0].script_pubkey.as_bytes()[1], 0x4c); // OP_PUSHDATA1
+        assert!(is_opreturn_counterparty(&tx));
+
+        // 60 bytes of data, pushed with OP_PUSHBYTES_60
+        let mut plaintext = CNTRPRTY.to_vec();
+        plaintext.extend_from_slice(&[0x42; 52]);
+        assert_eq!(plaintext.len(), 60);
+        let tx = counterparty_opreturn_tx(&plaintext);
+        assert_eq!(tx.output[0].script_pubkey.as_bytes()[1], 60);
+        assert!(is_opreturn_counterparty(&tx));
+
+        // 80 bytes of data without the CounterParty prefix
+        let tx = counterparty_opreturn_tx(&[0x42; 80]);
+        assert!(!is_opreturn_counterparty(&tx));
     }
 
     #[test]
