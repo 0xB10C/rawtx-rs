@@ -1063,7 +1063,7 @@ mod tests {
         use super::Signature;
         use super::SignatureInfo;
 
-        let testcases = vec![
+        let testcases = [
             // #0 from https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv
             SignatureInfoTestcase {
                 sig: "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0".to_string(),
@@ -1131,7 +1131,7 @@ mod tests {
         use super::Signature;
         use super::SignatureInfo;
 
-        let testcases = vec![
+        let testcases = [
             // BIP 66 example 1 (DER encoded)
             SignatureInfoTestcase {
                 sig: "30440220d7a0417c3f6d1a15094d1cf2a3378ca0503eb8a57630953a9e2987e21ddd0a6502207a6266d686c99090920249991d3d42065b6d43eb70187b219c0db82e4f94d1a201".to_string(),
