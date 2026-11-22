@@ -459,22 +459,23 @@ impl SignatureInfo {
 
         match input_type {
             InputType::P2pk | InputType::P2pkLaxDer => {
-                // a P2PK script_sig consists of a single signature. This means
-                // the first byte is a PUSH_BYTES_XX followed by the bytes of the
-                // signature.
-                signature_infos.push(
-                    SignatureInfo::from_u8_slice_ecdsa(
-                        &input.script_sig.as_script().as_bytes()[1..],
-                    )
-                    .unwrap(),
-                );
+                // a P2PK script_sig consists of a single push of a signature.
+                // Depending on the length of the signature, that push can be a
+                // PUSH_BYTES_XX or an OP_PUSHDATA1, so the script is parsed
+                // instead of assuming a one byte push opcode.
+                let instructions = match instructions_as_vec(&input.script_sig) {
+                    Ok(ins) => ins,
+                    Err(e) => return Err(InputError::SignatureInfo(e)),
+                };
+                signature_infos
+                    .push(SignatureInfo::from_instruction_ecdsa(&instructions[0]).unwrap());
             }
             InputType::P2ms | InputType::P2msLaxDer => {
                 // a P2MS script_sig contains up to three signatures after an
                 // initial OP_FALSE.
                 let instructions = match instructions_as_vec(&input.script_sig) {
                     Ok(ins) => ins,
-                    Err(e) => return Err(InputError::PubkeyInfo(e)),
+                    Err(e) => return Err(InputError::SignatureInfo(e)),
                 };
                 for instruction in instructions[1..].iter() {
                     signature_infos
@@ -486,7 +487,7 @@ impl SignatureInfo {
                 // script_sig.
                 let instructions = match instructions_as_vec(&input.script_sig) {
                     Ok(ins) => ins,
-                    Err(e) => return Err(InputError::PubkeyInfo(e)),
+                    Err(e) => return Err(InputError::SignatureInfo(e)),
                 };
                 signature_infos
                     .push(SignatureInfo::from_instruction_ecdsa(&instructions[0]).unwrap());
@@ -511,7 +512,7 @@ impl SignatureInfo {
                 // in the redeem script.
                 let instructions = match instructions_as_vec(&input.script_sig) {
                     Ok(ins) => ins,
-                    Err(e) => return Err(InputError::PubkeyInfo(e)),
+                    Err(e) => return Err(InputError::SignatureInfo(e)),
                 };
                 for instruction in instructions[..instructions.len() - 1].iter() {
                     if let Some(signature_info) = SignatureInfo::from_instruction_ecdsa(instruction)
@@ -1435,5 +1436,57 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[test]
+    fn p2pk_lax_der_signature_pushed_with_pushdata1() {
+        use super::{SignatureInfo, SignatureType};
+        use crate::input::{InputType, InputTypeDetection};
+        use bitcoin::script::PushBytesBuf;
+        use std::convert::TryFrom;
+
+        // Borrow the r and s values from a known-good signature so that the
+        // signature we build below is actually parsable.
+        let strict = ScriptBuf::from_hex(STRICT_DER_SIG).unwrap().into_bytes();
+        let compact = match SignatureInfo::from_u8_slice_ecdsa(&strict)
+            .unwrap()
+            .signature
+        {
+            SignatureType::Ecdsa(sig) => sig.serialize_compact(),
+            SignatureType::Schnorr(_) => panic!("expected an ECDSA signature"),
+        };
+        let (r, s) = compact.split_at(32);
+
+        // A non-strict (lax) DER signature with r zero-padded to 64 bytes.
+        // Including the sighash flag this is 103 bytes long, so it's pushed
+        // with OP_PUSHDATA1 rather than a single push opcode.
+        let mut sig: Vec<u8> = vec![0x30, 0x64, 0x02, 0x40];
+        sig.extend_from_slice(&[0x00u8; 32]); // the zero padding of r
+        sig.extend_from_slice(r);
+        sig.push(0x02);
+        sig.push(0x20);
+        sig.extend_from_slice(s);
+        sig.push(0x01); // sighash flag
+        assert_eq!(sig.len(), 103);
+
+        let script_sig = bitcoin::script::Builder::new()
+            .push_slice(PushBytesBuf::try_from(sig).unwrap())
+            .into_script();
+        // OP_PUSHDATA1, the length byte and the signature
+        assert_eq!(script_sig.len(), 1 + 1 + 103);
+
+        let tx: Transaction =
+            bitcoin::consensus::deserialize(&hex::decode(crate::testdata::TX_P2PK).unwrap())
+                .unwrap();
+        let mut input = tx.input[0].clone();
+        input.script_sig = script_sig;
+
+        assert_eq!(input.get_type().unwrap(), InputType::P2pkLaxDer);
+
+        let signature_infos = SignatureInfo::all_from(&input).unwrap();
+        assert_eq!(signature_infos.len(), 1);
+        assert_ne!(signature_infos[0].der_encoded, DEREncoding::Valid);
+
+        assert!(InputInfo::new(&input).is_ok());
     }
 }
