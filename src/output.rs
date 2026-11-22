@@ -847,6 +847,426 @@ mod tests {
         }
     }
 
+    #[test]
+    fn witness_commitment_detection_byte_by_byte() {
+        // OP_RETURN OP_PUSHBYTES_36 aa21a9ed <32 byte commitment>
+        let header = vec![0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
+        let valid = [header.clone(), vec![0x11; 32]].concat();
+        let out = script_output(valid.clone());
+        assert_eq!(out.script_pubkey.len(), 38);
+        assert!(out.is_witness_commitment());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::WitnessCommitment)
+        );
+
+        // longer witness commitments are allowed
+        let out = script_output([header.clone(), vec![0x11; 40]].concat());
+        assert!(out.is_witness_commitment());
+
+        // 37 bytes is one byte too short
+        let out = script_output([header.clone(), vec![0x11; 31]].concat());
+        assert_eq!(out.script_pubkey.len(), 37);
+        assert!(!out.is_witness_commitment());
+
+        // each of the six header bytes is checked
+        for (index, byte) in header.iter().enumerate() {
+            let out = script_output(with_byte_replaced(&valid, index, byte.wrapping_add(1)));
+            assert!(
+                !out.is_witness_commitment(),
+                "byte {} should be checked",
+                index
+            );
+        }
+    }
+
+    #[test]
+    fn opreturn_omni_detection_byte_by_byte() {
+        // OP_RETURN OP_PUSHBYTES_5 'omni' <1 byte>
+        let valid = vec![0x6a, 0x05, b'o', b'm', b'n', b'i', 0x00];
+        let out = script_output(valid.clone());
+        assert_eq!(out.script_pubkey.len(), 7);
+        assert!(out.is_opreturn_omni());
+        assert_eq!(out.get_type(), OutputType::OpReturn(OpReturnFlavor::Omni));
+
+        // seven bytes is the shortest Omni OP_RETURN, six bytes aren't enough
+        let out = script_output(vec![0x6a, 0x04, b'o', b'm', b'n', b'i']);
+        assert_eq!(out.script_pubkey.len(), 6);
+        assert!(!out.is_opreturn_omni());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::Unspecified)
+        );
+
+        // the OP_RETURN and each of the four 'omni' bytes are checked
+        for index in [0usize, 2, 3, 4, 5].iter() {
+            let out = script_output(with_byte_replaced(&valid, *index, b'x'));
+            assert!(!out.is_opreturn_omni(), "byte {} should be checked", index);
+        }
+
+        // the data push length in byte 1 isn't checked, as it differs between
+        // Omni OP_RETURNs
+        let out = script_output(with_byte_replaced(&valid, 1, 0x14));
+        assert!(out.is_opreturn_omni());
+    }
+
+    #[test]
+    fn opreturn_stacks_blockcommit_detection_byte_by_byte() {
+        // OP_RETURN OP_PUSHDATA1 80 'X2[' <77 bytes>
+        let header = vec![0x6a, 0x4c, 0x50, b'X', b'2', b'['];
+        let valid = [header.clone(), vec![0x11; 77]].concat();
+        let out = script_output(valid.clone());
+        assert_eq!(out.script_pubkey.len(), 83);
+        assert!(out.is_opreturn_stacks_blockcommit());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::StacksBlockCommit)
+        );
+
+        // each of the six header bytes is checked
+        for (index, byte) in header.iter().enumerate() {
+            let out = script_output(with_byte_replaced(&valid, index, byte.wrapping_add(1)));
+            assert!(
+                !out.is_opreturn_stacks_blockcommit(),
+                "byte {} should be checked",
+                index
+            );
+        }
+
+        // 82 bytes is one byte too short
+        let out = script_output([header.clone(), vec![0x11; 76]].concat());
+        assert_eq!(out.script_pubkey.len(), 82);
+        assert!(!out.is_opreturn_stacks_blockcommit());
+
+        // 84 bytes is one byte too long
+        let out = script_output([header.clone(), vec![0x11; 78]].concat());
+        assert_eq!(out.script_pubkey.len(), 84);
+        assert!(!out.is_opreturn_stacks_blockcommit());
+    }
+
+    /// Builds an 80 byte BIP-47 payment code payload:
+    /// <version> <features> <sign> <32 byte x value> <32 byte chain code> <13 zero bytes>
+    fn bip47_payload(version: u8, sign: u8) -> Vec<u8> {
+        let payload = [
+            vec![version, 0x00, sign],
+            vec![0x11; 32],
+            vec![0x22; 32],
+            vec![0x00; 13],
+        ]
+        .concat();
+        assert_eq!(payload.len(), 80);
+        payload
+    }
+
+    /// Wraps a BIP-47 payload in an OP_RETURN OP_PUSHDATA1 80 <payload> script.
+    fn bip47_output(payload: &[u8]) -> TxOut {
+        script_output([&[0x6a, 0x4c, 0x50], payload].concat())
+    }
+
+    #[test]
+    fn opreturn_bip47_payment_code_detection_byte_by_byte() {
+        // both payment code versions and both public key signs are detected
+        for version in [0x01u8, 0x02].iter() {
+            for sign in [0x02u8, 0x03].iter() {
+                let out = bip47_output(&bip47_payload(*version, *sign));
+                assert_eq!(out.script_pubkey.len(), 83);
+                assert!(
+                    out.is_opreturn_bip47_payment_code(),
+                    "version {} with sign {} should be a payment code",
+                    version,
+                    sign
+                );
+                assert_eq!(
+                    out.get_type(),
+                    OutputType::OpReturn(OpReturnFlavor::Bip47PaymentCode)
+                );
+            }
+        }
+
+        // only version 0x01 and 0x02 are payment codes
+        for version in [0x00u8, 0x03, 0xff].iter() {
+            let out = bip47_output(&bip47_payload(*version, 0x02));
+            assert!(
+                !out.is_opreturn_bip47_payment_code(),
+                "version {} shouldn't be a payment code",
+                version
+            );
+        }
+
+        // only sign 0x02 and 0x03 are valid
+        for sign in [0x00u8, 0x01, 0x04].iter() {
+            let out = bip47_output(&bip47_payload(0x01, *sign));
+            assert!(
+                !out.is_opreturn_bip47_payment_code(),
+                "sign {} shouldn't be a payment code",
+                sign
+            );
+        }
+
+        // the x value must not be all zeros
+        let mut payload = bip47_payload(0x01, 0x02);
+        payload[3..35].fill(0x00);
+        assert!(!bip47_output(&payload).is_opreturn_bip47_payment_code());
+
+        // the chain code must not be all zeros
+        let mut payload = bip47_payload(0x01, 0x02);
+        payload[35..67].fill(0x00);
+        assert!(!bip47_output(&payload).is_opreturn_bip47_payment_code());
+
+        // the reserved bytes must all be zero
+        let payload = bip47_payload(0x01, 0x02);
+        for index in 67..80 {
+            let modified = with_byte_replaced(&payload, index, 0x01);
+            assert!(
+                !bip47_output(&modified).is_opreturn_bip47_payment_code(),
+                "reserved byte {} should be zero",
+                index
+            );
+        }
+
+        // the three script header bytes are checked. The replacements keep the
+        // script at 83 bytes.
+        let payload = bip47_payload(0x01, 0x02);
+        let valid = [&[0x6a, 0x4c, 0x50], &payload[..]].concat();
+        for (index, byte) in [(0usize, 0x6bu8), (1, 0x4b), (2, 0x4f)].iter() {
+            let out = script_output(with_byte_replaced(&valid, *index, *byte));
+            assert_eq!(out.script_pubkey.len(), 83);
+            assert!(
+                !out.is_opreturn_bip47_payment_code(),
+                "byte {} should be checked",
+                index
+            );
+        }
+
+        // 82 bytes is one byte too short
+        let out = script_output([&[0x6a, 0x4c, 0x4f], &payload[..79]].concat());
+        assert_eq!(out.script_pubkey.len(), 82);
+        assert!(!out.is_opreturn_bip47_payment_code());
+
+        // 84 bytes is one byte too long
+        let out = script_output([&[0x6a, 0x4c, 0x51][..], &payload[..], &[0x00]].concat());
+        assert_eq!(out.script_pubkey.len(), 84);
+        assert!(!out.is_opreturn_bip47_payment_code());
+    }
+
+    #[test]
+    fn opreturn_rsk_block_detection_byte_by_byte() {
+        // OP_RETURN OP_PUSHBYTES_41 'RSKBLOCK:' <32 bytes>
+        let header = [vec![0x6a, 0x29], b"RSKBLOCK:".to_vec()].concat();
+        let valid = [header.clone(), vec![0x11; 32]].concat();
+        let out = script_output(valid.clone());
+        assert_eq!(out.script_pubkey.len(), 43);
+        assert!(out.is_opreturn_rsk_block());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::RSKBlock)
+        );
+
+        // each of the header bytes is checked
+        for (index, byte) in header.iter().enumerate() {
+            let out = script_output(with_byte_replaced(&valid, index, byte.wrapping_add(1)));
+            assert!(
+                !out.is_opreturn_rsk_block(),
+                "byte {} should be checked",
+                index
+            );
+        }
+
+        // 42 bytes is one byte too short
+        let out = script_output([header.clone(), vec![0x11; 31]].concat());
+        assert_eq!(out.script_pubkey.len(), 42);
+        assert!(!out.is_opreturn_rsk_block());
+
+        // 44 bytes is one byte too long for this form
+        let out = script_output([header.clone(), vec![0x11; 33]].concat());
+        assert_eq!(out.script_pubkey.len(), 44);
+        assert!(!out.is_opreturn_rsk_block());
+
+        // F2Pool pushes the same data with an OP_PUSHDATA1 instead:
+        // OP_RETURN OP_PUSHDATA1 41 'RSKBLOCK:' <32 bytes>
+        let header = [vec![0x6a, 0x4c, 0x29], b"RSKBLOCK:".to_vec()].concat();
+        let valid = [header.clone(), vec![0x11; 32]].concat();
+        let out = script_output(valid.clone());
+        assert_eq!(out.script_pubkey.len(), 44);
+        assert!(out.is_opreturn_rsk_block());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::RSKBlock)
+        );
+
+        // each of the header bytes is checked
+        for (index, byte) in header.iter().enumerate() {
+            let out = script_output(with_byte_replaced(&valid, index, byte.wrapping_add(1)));
+            assert!(
+                !out.is_opreturn_rsk_block(),
+                "byte {} should be checked",
+                index
+            );
+        }
+
+        // 43 bytes is one byte too short for the OP_PUSHDATA1 form
+        let out = script_output([header.clone(), vec![0x11; 31]].concat());
+        assert_eq!(out.script_pubkey.len(), 43);
+        assert!(!out.is_opreturn_rsk_block());
+
+        // 45 bytes is one byte too long
+        let out = script_output([header.clone(), vec![0x11; 33]].concat());
+        assert_eq!(out.script_pubkey.len(), 45);
+        assert!(!out.is_opreturn_rsk_block());
+    }
+
+    #[test]
+    fn opreturn_coredao_detection_byte_by_byte() {
+        // OP_RETURN OP_PUSHBYTES_45 'CORE' <version 0x01> <40 bytes>
+        let header = [vec![0x6a, 0x2d], b"CORE".to_vec(), vec![0x01]].concat();
+        let valid = [header.clone(), vec![0x11; 40]].concat();
+        let out = script_output(valid.clone());
+        assert_eq!(out.script_pubkey.len(), 47);
+        assert!(out.is_opreturn_coredao());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::CoreDao)
+        );
+
+        // each of the header bytes is checked, including the version byte
+        for (index, byte) in header.iter().enumerate() {
+            let out = script_output(with_byte_replaced(&valid, index, byte.wrapping_add(1)));
+            assert!(
+                !out.is_opreturn_coredao(),
+                "byte {} should be checked",
+                index
+            );
+        }
+
+        // only version 0x01 is known
+        let out = script_output(with_byte_replaced(&valid, 6, 0x02));
+        assert!(!out.is_opreturn_coredao());
+
+        // 46 bytes is one byte too short
+        let out = script_output([header.clone(), vec![0x11; 39]].concat());
+        assert_eq!(out.script_pubkey.len(), 46);
+        assert!(!out.is_opreturn_coredao());
+
+        // 48 bytes is one byte too long
+        let out = script_output([header.clone(), vec![0x11; 41]].concat());
+        assert_eq!(out.script_pubkey.len(), 48);
+        assert!(!out.is_opreturn_coredao());
+    }
+
+    #[test]
+    fn opreturn_exsat_detection_byte_by_byte() {
+        // OP_RETURN OP_PUSHBYTES_7 'EXSAT' <version 0x01> <1 byte>
+        let header = [vec![0x6a, 0x07], b"EXSAT".to_vec(), vec![0x01]].concat();
+        let valid = [header.clone(), vec![0x11; 1]].concat();
+        let out = script_output(valid.clone());
+        assert_eq!(out.script_pubkey.len(), 9);
+        assert!(out.is_opreturn_exsat());
+        assert_eq!(out.get_type(), OutputType::OpReturn(OpReturnFlavor::ExSat));
+
+        // nine bytes is the shortest ExSat OP_RETURN, eight bytes aren't enough
+        let out = script_output(header.clone());
+        assert_eq!(out.script_pubkey.len(), 8);
+        assert!(!out.is_opreturn_exsat());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::Unspecified)
+        );
+
+        // the OP_RETURN, the five 'EXSAT' bytes and the version are checked
+        for index in [0usize, 2, 3, 4, 5, 6, 7].iter() {
+            let byte = valid[*index].wrapping_add(1);
+            let out = script_output(with_byte_replaced(&valid, *index, byte));
+            assert!(!out.is_opreturn_exsat(), "byte {} should be checked", index);
+        }
+
+        // the data push length in byte 1 isn't checked, as it differs between pools
+        let out = script_output(with_byte_replaced(&valid, 1, 0x12));
+        assert!(out.is_opreturn_exsat());
+
+        // longer ExSat OP_RETURNs are detected too
+        let out = script_output([header.clone(), vec![0x11; 10]].concat());
+        assert!(out.is_opreturn_exsat());
+    }
+
+    #[test]
+    fn opreturn_hathor_detection_byte_by_byte() {
+        // OP_RETURN OP_PUSHBYTES_36 'Hath' <32 byte aux_block_hash>
+        let header = [vec![0x6a, 0x24], b"Hath".to_vec()].concat();
+        let valid = [header.clone(), vec![0x11; 32]].concat();
+        let out = script_output(valid.clone());
+        assert_eq!(out.script_pubkey.len(), 38);
+        assert!(out.is_opreturn_hathor());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::HathorNetwork)
+        );
+
+        // each of the header bytes is checked
+        for (index, byte) in header.iter().enumerate() {
+            let out = script_output(with_byte_replaced(&valid, index, byte.wrapping_add(1)));
+            assert!(
+                !out.is_opreturn_hathor(),
+                "byte {} should be checked",
+                index
+            );
+        }
+
+        // 37 bytes is one byte too short
+        let out = script_output([header.clone(), vec![0x11; 31]].concat());
+        assert_eq!(out.script_pubkey.len(), 37);
+        assert!(!out.is_opreturn_hathor());
+
+        // 39 bytes is one byte too long
+        let out = script_output([header.clone(), vec![0x11; 33]].concat());
+        assert_eq!(out.script_pubkey.len(), 39);
+        assert!(!out.is_opreturn_hathor());
+    }
+
+    #[test]
+    fn opreturn_runestone_detection() {
+        // OP_RETURN OP_PUSHNUM_13 OP_PUSHBYTES_2 <2 bytes>
+        let out = script_output(vec![0x6a, 0x5d, 0x02, 0xaa, 0xbb]);
+        assert!(out.is_opreturn_runestone());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::Runestone)
+        );
+
+        // several data pushes are fine
+        let out = script_output(vec![0x6a, 0x5d, 0x01, 0xaa, 0x03, 0x01, 0x02, 0x03]);
+        assert!(out.is_opreturn_runestone());
+
+        // an OP_RETURN OP_PUSHNUM_13 without any data push isn't a runestone
+        let out = script_output(vec![0x6a, 0x5d]);
+        assert_eq!(out.script_pubkey.len(), 2);
+        assert!(!out.is_opreturn_runestone());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::Unspecified)
+        );
+
+        // anything but a data push after the OP_PUSHNUM_13 isn't allowed
+        let out = script_output(vec![0x6a, 0x5d, 0x51]);
+        assert!(!out.is_opreturn_runestone());
+
+        // a truncated data push can't be parsed
+        let out = script_output(vec![0x6a, 0x5d, 0x4c]);
+        assert!(!out.is_opreturn_runestone());
+
+        // OP_PUSHNUM_12 instead of OP_PUSHNUM_13
+        let out = script_output(vec![0x6a, 0x5c, 0x02, 0xaa, 0xbb]);
+        assert!(!out.is_opreturn_runestone());
+
+        // the script has to start with an OP_RETURN. Here it starts with an
+        // OP_TOALTSTACK, while all following instructions are data pushes.
+        let out = script_output(vec![0x6b, 0x5d, 0x02, 0xaa, 0xbb]);
+        assert!(!out.is_opreturn_runestone());
+
+        // a P2WPKH script isn't a runestone either
+        let out = script_output([vec![0x00, 0x14], vec![0xab; 20]].concat());
+        assert!(!out.is_opreturn_runestone());
+    }
+
     /// A script that is not an OP_RETURN must never be reported as an OP_RETURN
     /// with a given data length, even when its total length happens to match.
     /// A 22 byte P2WPKH script (OP_0 OP_PUSHBYTES_20 <20 bytes>) is such a
