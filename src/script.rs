@@ -1652,4 +1652,156 @@ mod tests {
         let pubkey = hex::decode(SCHNORR_PUBKEY).unwrap();
         assert!(!pubkey.is_signature());
     }
+
+    /// The shortest signature we accept: the R and the S value are a single
+    /// byte each. Together with the sighash flag that's nine bytes.
+    ///
+    /// Layout: 0x30 0x06 | 0x02 0x01 0x01 | 0x02 0x01 0x01 | 0x01
+    const MIN_LEN_DER_SIG: [u8; 9] = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01, 0x01];
+
+    /// A 123 byte signature with 52 bytes of padding after the DER encoded
+    /// part, taken from input 0 of mainnet
+    /// 23befff6eea3dded0e34574af65c266c9398e7d7d9d07022bf1cd526c5cdbc94.
+    /// This is the longest signature we accept.
+    const LAX_DER_SIG: &str = "304502210099d6f5897eec6f2c4aeb3ccb43dc19f45f4a43372fd68a9e835bec463159e6620220365d554d87d656907af6a9c98768900c7e8cfbd3352d108c48d383cd6b08f6a02a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a01";
+
+    #[test]
+    fn ecdsa_signature_length_limits() {
+        use super::{Signature, SignatureInfo};
+
+        // The shortest signature we accept is nine bytes long.
+        assert!(MIN_LEN_DER_SIG[..].is_ecdsa_signature(false));
+        assert!(MIN_LEN_DER_SIG[..].is_ecdsa_signature(true));
+        let info = SignatureInfo::from_u8_slice_ecdsa(&MIN_LEN_DER_SIG).unwrap();
+        assert_eq!(info.length, 9);
+        assert_eq!(info.sig_hash, 0x01);
+        assert_eq!(info.der_encoded, DEREncoding::Valid);
+
+        // One byte less and it's too short.
+        assert!(!MIN_LEN_DER_SIG[..8].is_ecdsa_signature(false));
+        assert!(!MIN_LEN_DER_SIG[..8].is_ecdsa_signature(true));
+        assert!(SignatureInfo::from_u8_slice_ecdsa(&MIN_LEN_DER_SIG[..8]).is_none());
+
+        // A strictly DER encoded signature is at most 73 bytes long.
+        let strict = ScriptBuf::from_hex(STRICT_DER_SIG).unwrap().into_bytes();
+        assert_eq!(strict.len(), 73);
+        assert!(strict.is_ecdsa_signature(true));
+
+        let mut strict_too_long = strict.clone();
+        strict_too_long.push(0x01);
+        assert_eq!(strict_too_long.len(), 74);
+        assert!(!strict_too_long.is_ecdsa_signature(true));
+        // Without the strict DER requirement the same bytes are accepted.
+        assert!(strict_too_long.is_ecdsa_signature(false));
+
+        // A non-strict signature is at most 123 bytes long.
+        let lax = ScriptBuf::from_hex(LAX_DER_SIG).unwrap().into_bytes();
+        assert_eq!(lax.len(), 123);
+        assert!(lax.is_ecdsa_signature(false));
+        assert!(!lax.is_ecdsa_signature(true));
+        assert!(SignatureInfo::from_u8_slice_ecdsa(&lax).is_some());
+
+        let mut lax_too_long = lax.clone();
+        lax_too_long.push(0x01);
+        assert_eq!(lax_too_long.len(), 124);
+        assert!(!lax_too_long.is_ecdsa_signature(false));
+        assert!(!lax_too_long.is_ecdsa_signature(true));
+        assert!(SignatureInfo::from_u8_slice_ecdsa(&lax_too_long).is_none());
+    }
+
+    #[test]
+    fn der_encoding_of_single_byte_r_and_s_values() {
+        use super::is_strict_der_encoded_ecdsa_sig;
+
+        // A single null byte is the shortest encoding of a zero value, so the
+        // "no null byte at the start" rule must not apply to it.
+        let zero_r: [u8; 9] = [0x30, 0x06, 0x02, 0x01, 0x00, 0x02, 0x01, 0x01, 0x01];
+        assert_eq!(
+            is_strict_der_encoded_ecdsa_sig(&zero_r),
+            DEREncoding::Valid,
+            "a single null byte as the R value"
+        );
+
+        let zero_s: [u8; 9] = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x01];
+        assert_eq!(
+            is_strict_der_encoded_ecdsa_sig(&zero_s),
+            DEREncoding::Valid,
+            "a single null byte as the S value"
+        );
+    }
+
+    #[test]
+    fn ecdsa_signatures_are_parsed_without_the_sighash_flag() {
+        use super::SignatureInfo;
+        use bitcoin::secp256k1::ecdsa;
+
+        // The compound length descriptor (0x08) claims all of the remaining
+        // bytes, including the one that is the sighash flag. Only parsing the
+        // signature with the sighash flag still attached makes this succeed.
+        let sig: [u8; 10] = [0x30, 0x08, 0x02, 0x01, 0x01, 0x02, 0x03, 0x01, 0x01, 0x01];
+        assert!(ecdsa::Signature::from_der_lax(&sig).is_ok());
+        assert!(ecdsa::Signature::from_der_lax(&sig[..sig.len() - 1]).is_err());
+
+        assert!(SignatureInfo::from_u8_slice_ecdsa(&sig).is_none());
+    }
+
+    /// Builds a SignatureInfo for an ECDSA signature with the given R and S
+    /// values.
+    fn ecdsa_signature_info(r: [u8; 32], s: [u8; 32]) -> super::SignatureInfo {
+        use super::{SignatureInfo, SignatureType};
+        use bitcoin::secp256k1::ecdsa;
+
+        let mut compact = [0u8; 64];
+        compact[..32].copy_from_slice(&r);
+        compact[32..].copy_from_slice(&s);
+
+        SignatureInfo {
+            signature: SignatureType::Ecdsa(ecdsa::Signature::from_compact(&compact).unwrap()),
+            der_encoded: DEREncoding::Valid,
+            sig_hash: 0x01,
+            length: 71,
+        }
+    }
+
+    #[test]
+    fn low_r_and_low_s_boundaries() {
+        // A low R value has its highest bit unset, which means it is encoded
+        // in 32 bytes rather than 33.
+        let mut just_below_threshold = [0xFFu8; 32];
+        just_below_threshold[0] = 0x7F;
+
+        let mut at_threshold = [0x00u8; 32];
+        at_threshold[0] = 0x80;
+
+        let mut above_threshold = at_threshold;
+        above_threshold[31] = 0x01;
+
+        // A small, valid S value that is well below the half curve order.
+        let mut small_s = [0x00u8; 32];
+        small_s[31] = 0x01;
+
+        let testcases = [
+            ("just below the threshold", just_below_threshold, true),
+            ("exactly at the threshold", at_threshold, false),
+            ("above the threshold", above_threshold, false),
+        ];
+
+        for (name, r, expected) in testcases.iter() {
+            let info = ecdsa_signature_info(*r, small_s);
+            assert_eq!(info.low_r(), *expected, "low r: {}", name);
+            assert!(info.low_s(), "low s: {}", name);
+        }
+
+        // An S value is low as long as it isn't larger than half the curve
+        // order.
+        let half_curve_order = super::SECP256K1_HALF_CURVE_ORDER;
+        let mut one_above = half_curve_order;
+        one_above[31] += 1;
+        let mut one_below = half_curve_order;
+        one_below[31] -= 1;
+
+        assert!(ecdsa_signature_info(small_s, one_below).low_s());
+        assert!(ecdsa_signature_info(small_s, half_curve_order).low_s());
+        assert!(!ecdsa_signature_info(small_s, one_above).low_s());
+    }
 }
