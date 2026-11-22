@@ -232,9 +232,9 @@ impl TxInfo {
     }
 
     /// Returns true if the transaction could be a equal-output-value coinjoin.
-    /// Coinjoins require at least two inputs and two equal-value-outputs.
-    /// Furthermore, we check if at least one third of the outputs has the same
-    /// output-value.
+    /// Coinjoins require at least two inputs and at least two outputs. We also
+    /// require more than two outputs to share the same value and at least a
+    /// third of the outputs to have that value.
     pub fn potentially_coinjoin(&self) -> bool {
         if !(self.input_infos.len() < 2 || self.output_infos.len() < 2) {
             let mut a: HashMap<Amount, usize> = HashMap::new();
