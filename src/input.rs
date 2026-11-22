@@ -896,14 +896,94 @@ impl InputInscriptionDetection for TxIn {
 #[cfg(test)]
 mod tests {
     use super::{
-        InputInfo, InputInscriptionDetection, InputMultisigDetection, InputSigops, InputType,
-        InputTypeDetection, MultisigInputInfo,
+        InputError, InputInfo, InputInscriptionDetection, InputMultisigDetection, InputSigops,
+        InputType, InputTypeDetection, MultisigInputInfo,
     };
     use crate::testdata;
+    use bitcoin::blockdata::script;
     use bitcoin::Transaction;
 
     fn decode_tx(hex: &str) -> Transaction {
         bitcoin::consensus::deserialize(&hex::decode(hex).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn input_error_messages_name_the_failing_step() {
+        let inner = script::Error::EarlyEndOfScript;
+        let inner_text = inner.to_string();
+        let cases: Vec<(InputError, &str)> = vec![
+            (
+                InputError::TypeInfo(inner.clone()),
+                "Could not determine type of input: ",
+            ),
+            (
+                InputError::MultisigInfo(inner.clone()),
+                "Could not extract multisig infos from input: ",
+            ),
+            (
+                InputError::SignatureInfo(inner.clone()),
+                "Could not extract signature infos from input: ",
+            ),
+            (
+                InputError::PubkeyInfo(inner.clone()),
+                "Could not extract pubkey infos from input: ",
+            ),
+            (
+                InputError::SigOpsInfo(inner.clone()),
+                "Could not extract sigops infos from input: ",
+            ),
+            (
+                InputError::ScriptHashInfo(inner.clone()),
+                "Could not extract sighash infos from input: ",
+            ),
+        ];
+
+        for (error, prefix) in cases.iter() {
+            assert_eq!(error.to_string(), format!("{}{}", prefix, inner_text));
+            // the wrapped script error is reachable as the error source
+            let source = std::error::Error::source(error);
+            assert!(source.is_some(), "no source for {:?}", error);
+            assert_eq!(source.unwrap().to_string(), inner_text);
+        }
+
+        // every variant has its own message
+        let mut messages: Vec<String> = cases.iter().map(|(e, _)| e.to_string()).collect();
+        messages.sort();
+        messages.dedup();
+        assert_eq!(messages.len(), cases.len());
+    }
+
+    #[test]
+    fn input_type_labels() {
+        let cases = [
+            (InputType::P2pk, "P2PK"),
+            (InputType::P2pkLaxDer, "P2PK (lax DER)"),
+            (InputType::P2pkh, "P2PKH"),
+            (InputType::P2pkhLaxDer, "P2PKH (lax DER)"),
+            (InputType::P2shP2wpkh, "P2SH-P2WPKH"),
+            (InputType::P2wpkh, "P2WPKH"),
+            (InputType::P2ms, "P2MS"),
+            (InputType::P2msLaxDer, "P2MS (lax DER)"),
+            (InputType::P2sh, "P2SH"),
+            (InputType::P2shP2wsh, "P2SH-P2WSH"),
+            (InputType::P2wsh, "P2WSH"),
+            (InputType::P2trkp, "P2TR key-path"),
+            (InputType::P2trsp, "P2TR script-path"),
+            (InputType::P2a, "P2A"),
+            (InputType::Coinbase, "Coinbase"),
+            (InputType::CoinbaseWitness, "Coinbase with Witness"),
+            (InputType::Unknown, "UNKNOWN"),
+        ];
+
+        for (in_type, label) in cases.iter() {
+            assert_eq!(&in_type.to_string(), label);
+        }
+
+        // every variant has its own label
+        let mut labels: Vec<&str> = cases.iter().map(|(_, l)| *l).collect();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), cases.len());
     }
 
     #[test]
