@@ -1436,6 +1436,17 @@ mod tests {
     }
 
     #[test]
+    fn output_error_source() {
+        let error = OutputError::PubkeyInfo(script::Error::EarlyEndOfScript);
+        let source =
+            std::error::Error::source(&error).expect("the script error should be the source");
+        assert_eq!(
+            source.to_string(),
+            script::Error::EarlyEndOfScript.to_string()
+        );
+    }
+
+    #[test]
     fn output_type_detection_opreturn_data_lengths() {
         // OP_RETURN OP_PUSHBYTES_1 0x00 pushes one byte of data
         let one_byte = opreturn_output(&[0x00]);
