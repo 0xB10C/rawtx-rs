@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn tx_payments() {
-        let testcases = vec![
+        let testcases = [
             (3, testdata::TX_2IN_4OUT),
             (1, testdata::TX_1IN_1OUT),
             (1, testdata::TX_1IN_2OUT),
