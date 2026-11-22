@@ -1299,6 +1299,75 @@ mod tests {
     }
 
     #[test]
+    fn is_opreturn_with_len_boundaries() {
+        // A bare OP_RETURN is shorter than the two byte minimum. It doesn't
+        // have a data push at all, not even an empty one.
+        let bare = script_output(vec![0x6a]);
+        for data_length in 0..3 {
+            assert!(
+                !bare.is_opreturn_with_len(data_length),
+                "a bare OP_RETURN doesn't push {} bytes",
+                data_length
+            );
+        }
+
+        // OP_RETURN OP_0 is the shortest OP_RETURN with a data push. It pushes
+        // zero bytes.
+        let empty_push = script_output(vec![0x6a, 0x00]);
+        assert_eq!(empty_push.script_pubkey.len(), 2);
+        assert!(empty_push.is_opreturn_with_len(0));
+        assert!(!empty_push.is_opreturn_with_len(1));
+
+        // OP_RETURN OP_PUSHBYTES_1 <1 byte>
+        let one = script_output(vec![0x6a, 0x01, 0xaa]);
+        assert!(one.is_opreturn_with_len(1));
+        assert!(!one.is_opreturn_with_len(0));
+        assert!(!one.is_opreturn_with_len(2));
+
+        // OP_RETURN OP_PUSHBYTES_74 <74 bytes>, 76 bytes in total
+        let seventy_four = script_output([vec![0x6a, 0x4a], vec![0xaa; 74]].concat());
+        assert_eq!(seventy_four.script_pubkey.len(), 76);
+        assert!(seventy_four.is_opreturn_with_len(74));
+        assert!(!seventy_four.is_opreturn_with_len(73));
+        assert!(!seventy_four.is_opreturn_with_len(75));
+
+        // The longest OP_PUSHBYTES form:
+        // OP_RETURN OP_PUSHBYTES_75 <75 bytes>, 77 bytes in total
+        let seventy_five = script_output([vec![0x6a, 0x4b], vec![0xaa; 75]].concat());
+        assert_eq!(seventy_five.script_pubkey.len(), 77);
+        assert!(seventy_five.is_opreturn_with_len(75));
+        assert!(!seventy_five.is_opreturn_with_len(74));
+        assert!(!seventy_five.is_opreturn_with_len(76));
+
+        // The shortest OP_PUSHDATA1 form, which needs one byte more for the
+        // data length: OP_RETURN OP_PUSHDATA1 76 <76 bytes>, 79 bytes in total
+        let seventy_six = script_output([vec![0x6a, 0x4c, 0x4c], vec![0xaa; 76]].concat());
+        assert_eq!(seventy_six.script_pubkey.len(), 79);
+        assert!(seventy_six.is_opreturn_with_len(76));
+        assert!(!seventy_six.is_opreturn_with_len(75));
+        assert!(!seventy_six.is_opreturn_with_len(77));
+
+        // The longest standard OP_RETURN:
+        // OP_RETURN OP_PUSHDATA1 80 <80 bytes>, 83 bytes in total
+        let eighty = script_output([vec![0x6a, 0x4c, 0x50], vec![0xaa; 80]].concat());
+        assert_eq!(eighty.script_pubkey.len(), 83);
+        assert!(eighty.is_opreturn_with_len(80));
+        assert!(!eighty.is_opreturn_with_len(79));
+        assert!(!eighty.is_opreturn_with_len(81));
+
+        // One byte longer than the maximum length: no data length matches.
+        let eighty_one = script_output([vec![0x6a, 0x4c, 0x51], vec![0xaa; 81]].concat());
+        assert_eq!(eighty_one.script_pubkey.len(), 84);
+        for data_length in 0..=84 {
+            assert!(
+                !eighty_one.is_opreturn_with_len(data_length),
+                "an 84 byte script doesn't push {} bytes",
+                data_length
+            );
+        }
+    }
+
+    #[test]
     fn opreturn_flavor_display() {
         let testcases: Vec<(OpReturnFlavor, &str)> = vec![
             (OpReturnFlavor::Unspecified, "OP_RETURN"),
