@@ -1804,4 +1804,107 @@ mod tests {
         assert!(ecdsa_signature_info(small_s, half_curve_order).low_s());
         assert!(!ecdsa_signature_info(small_s, one_above).low_s());
     }
+
+    /// A compressed public key, taken from the P2MS output of signet
+    /// 9becb93a15ab4b47eaca85c852d4309f82a28677a0a557df3c0fa6b82ef9293d.
+    const COMPRESSED_PUBKEY: &str =
+        "03c0e0bf0bbcdc53be9542359aeb1dde7c6289743b7b3460c12e2d57a478c6e489";
+
+    /// Builds a `<n> <pubkey>.. <m> OP_CHECKMULTISIG` script from the opcodes
+    /// in the n and m slots and the number of public keys in between.
+    fn multisig_script(
+        n: bitcoin::opcodes::Opcode,
+        pubkeys: usize,
+        m: bitcoin::opcodes::Opcode,
+    ) -> ScriptBuf {
+        use bitcoin::script::PushBytesBuf;
+        use std::convert::TryFrom;
+
+        let pubkey = hex::decode(COMPRESSED_PUBKEY).unwrap();
+        let mut builder = bitcoin::script::Builder::new().push_opcode(n);
+        for _ in 0..pubkeys {
+            builder = builder.push_slice(PushBytesBuf::try_from(pubkey.clone()).unwrap());
+        }
+        builder
+            .push_opcode(m)
+            .push_opcode(super::opcodes::OP_CHECKMULTISIG)
+            .into_script()
+    }
+
+    #[test]
+    fn multisig_n_and_m_push_opcodes() {
+        use super::opcodes::{
+            OP_NOP, OP_PUSHBYTES_0, OP_PUSHNUM_1, OP_PUSHNUM_16, OP_PUSHNUM_2, OP_PUSHNUM_3,
+            OP_PUSHNUM_NEG1,
+        };
+
+        let testcases = [
+            ("1-of-1", OP_PUSHNUM_1, 1, OP_PUSHNUM_1, Some((1, 1))),
+            ("2-of-3", OP_PUSHNUM_2, 3, OP_PUSHNUM_3, Some((2, 3))),
+            ("16-of-16", OP_PUSHNUM_16, 16, OP_PUSHNUM_16, Some((16, 16))),
+            // n is larger than m
+            ("3-of-2", OP_PUSHNUM_3, 2, OP_PUSHNUM_2, None),
+            // the number of public keys doesn't match m
+            ("2-of-3 with 4 keys", OP_PUSHNUM_2, 4, OP_PUSHNUM_3, None),
+            ("2-of-3 with 2 keys", OP_PUSHNUM_2, 2, OP_PUSHNUM_3, None),
+            // the opcode in the n or m slot is just below the push number
+            // opcodes
+            ("OP_1NEGATE as n", OP_PUSHNUM_NEG1, 3, OP_PUSHNUM_3, None),
+            ("OP_1NEGATE as m", OP_PUSHNUM_3, 3, OP_PUSHNUM_NEG1, None),
+            // .. or just above them
+            ("OP_NOP as n", OP_NOP, 3, OP_PUSHNUM_3, None),
+            ("OP_NOP as m", OP_PUSHNUM_3, 3, OP_NOP, None),
+            // OP_0 pushes an empty byte vector rather than being an opcode
+            ("OP_0 as n", OP_PUSHBYTES_0, 3, OP_PUSHNUM_3, None),
+            ("OP_0 as m", OP_PUSHNUM_3, 3, OP_PUSHBYTES_0, None),
+        ];
+
+        for (name, n, pubkeys, m, expected) in testcases.iter() {
+            let script = multisig_script(*n, *pubkeys, *m);
+            assert_eq!(
+                script.get_opcheckmultisig_n_m(),
+                Ok(*expected),
+                "testcase: {}",
+                name
+            );
+            assert_eq!(script.is_opcheckmultisig(), expected.is_some(), "{}", name);
+        }
+
+        // An empty script isn't a multisig script either.
+        let empty = ScriptBuf::new();
+        assert_eq!(empty.get_opcheckmultisig_n_m(), Ok(None));
+        assert!(!empty.is_opcheckmultisig());
+    }
+
+    #[test]
+    fn multisig_needs_at_least_one_data_push_between_n_and_m() {
+        use super::opcodes::{OP_NOP, OP_PUSHNUM_1, OP_PUSHNUM_2};
+        use bitcoin::script::PushBytesBuf;
+        use std::convert::TryFrom;
+
+        let pubkey = hex::decode(COMPRESSED_PUBKEY).unwrap();
+
+        // Not every element between the push number opcodes has to be a data
+        // push, one is enough. The last one is checked here, so that the end
+        // of the range matters.
+        let one_push = bitcoin::script::Builder::new()
+            .push_opcode(OP_PUSHNUM_1)
+            .push_opcode(OP_NOP)
+            .push_slice(PushBytesBuf::try_from(pubkey).unwrap())
+            .push_opcode(OP_PUSHNUM_2)
+            .push_opcode(super::opcodes::OP_CHECKMULTISIG)
+            .into_script();
+        assert_eq!(one_push.get_opcheckmultisig_n_m(), Ok(Some((1, 2))));
+
+        // Without any data push it's not considered a multisig script.
+        let no_push = bitcoin::script::Builder::new()
+            .push_opcode(OP_PUSHNUM_1)
+            .push_opcode(OP_NOP)
+            .push_opcode(OP_NOP)
+            .push_opcode(OP_PUSHNUM_2)
+            .push_opcode(super::opcodes::OP_CHECKMULTISIG)
+            .into_script();
+        assert_eq!(no_push.get_opcheckmultisig_n_m(), Ok(None));
+        assert!(!no_push.is_opcheckmultisig());
+    }
 }
