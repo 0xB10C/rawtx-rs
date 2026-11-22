@@ -1,6 +1,6 @@
 //! Tests for the public transaction information API.
 
-use rawtx_rs::bitcoin::Transaction;
+use rawtx_rs::bitcoin::{Amount, Transaction};
 use rawtx_rs::testdata;
 use rawtx_rs::tx::{TransactionSigops, TxInfo};
 
@@ -10,6 +10,33 @@ fn decode_tx(hex: &str) -> Transaction {
 
 fn tx_info(hex: &str) -> TxInfo {
     TxInfo::new(&decode_tx(hex)).unwrap()
+}
+
+/// Builds a transaction with `inputs` inputs and one output per entry in
+/// `output_values`. The inputs and outputs are copies of the inputs and
+/// outputs of a real transaction.
+fn tx_with(inputs: usize, output_values: &[u64]) -> Transaction {
+    let base = decode_tx(testdata::TX_2IN_4OUT);
+    let mut tx = base.clone();
+
+    tx.input = (0..inputs)
+        .map(|i| {
+            let mut input = base.input[i % base.input.len()].clone();
+            // keep the outpoints distinct
+            input.previous_output.vout = i as u32;
+            input
+        })
+        .collect();
+    tx.output = output_values
+        .iter()
+        .map(|value| {
+            let mut output = base.output[0].clone();
+            output.value = Amount::from_sat(*value);
+            output
+        })
+        .collect();
+
+    tx
 }
 
 /// A named check on a [TxInfo] returning either true or false.
@@ -281,6 +308,107 @@ fn spending_segwit_and_legacy_needs_both() {
     assert!(TxInfo::new(&reversed)
         .unwrap()
         .is_spending_segwit_and_legacy());
+}
+
+/// A transaction is a potential equal-output-value coinjoin if it has at least
+/// two inputs, at least two outputs, more than two outputs sharing the same
+/// value and at least a third of the outputs sharing that value.
+#[test]
+fn potentially_coinjoin_boundaries() {
+    // three equal-value outputs and two inputs are enough
+    assert!(TxInfo::new(&tx_with(2, &[100, 100, 100]))
+        .unwrap()
+        .potentially_coinjoin());
+    assert!(TxInfo::new(&tx_with(3, &[100, 100, 100]))
+        .unwrap()
+        .potentially_coinjoin());
+
+    // a single input is not enough
+    assert!(!TxInfo::new(&tx_with(1, &[100, 100, 100, 100]))
+        .unwrap()
+        .potentially_coinjoin());
+
+    // fewer than two outputs are not enough
+    assert!(!TxInfo::new(&tx_with(2, &[]))
+        .unwrap()
+        .potentially_coinjoin());
+    assert!(!TxInfo::new(&tx_with(2, &[100]))
+        .unwrap()
+        .potentially_coinjoin());
+
+    // two equal-value outputs are not enough
+    assert!(!TxInfo::new(&tx_with(2, &[100, 100]))
+        .unwrap()
+        .potentially_coinjoin());
+    assert!(!TxInfo::new(&tx_with(2, &[100, 100, 200, 300]))
+        .unwrap()
+        .potentially_coinjoin());
+
+    // no equal-value outputs at all
+    assert!(!TxInfo::new(&tx_with(2, &[100, 200, 300, 400]))
+        .unwrap()
+        .potentially_coinjoin());
+
+    // three of nine outputs share a value, which is exactly a third
+    assert!(TxInfo::new(&tx_with(2, &[100, 100, 100, 1, 2, 3, 4, 5, 6]))
+        .unwrap()
+        .potentially_coinjoin());
+
+    // three of twelve outputs share a value, which is less than a third
+    assert!(
+        !TxInfo::new(&tx_with(2, &[100, 100, 100, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .unwrap()
+            .potentially_coinjoin()
+    );
+}
+
+/// Of all test transactions only TX_P2TR_OUTPUT, which pays four equal
+/// amounts to five outputs, looks like a coinjoin.
+#[test]
+fn potentially_coinjoin_on_test_transactions() {
+    assert!(tx_info(testdata::TX_P2TR_OUTPUT).potentially_coinjoin());
+
+    for rawtx in testdata::ALL_TRANSACTIONS.iter() {
+        if *rawtx == testdata::TX_P2TR_OUTPUT {
+            continue;
+        }
+        let info = tx_info(rawtx);
+        assert!(
+            !info.potentially_coinjoin(),
+            "{} should not look like a coinjoin",
+            info.txid
+        );
+    }
+}
+
+/// A transaction is a potential consolidation if it has at least ten inputs
+/// and at most two outputs.
+#[test]
+fn potentially_consolidation_boundaries() {
+    assert!(TxInfo::new(&tx_with(10, &[100, 200]))
+        .unwrap()
+        .potentially_consolidation());
+    assert!(TxInfo::new(&tx_with(10, &[100]))
+        .unwrap()
+        .potentially_consolidation());
+    assert!(TxInfo::new(&tx_with(11, &[100, 200]))
+        .unwrap()
+        .potentially_consolidation());
+
+    // too few inputs
+    assert!(!TxInfo::new(&tx_with(9, &[100, 200]))
+        .unwrap()
+        .potentially_consolidation());
+    // too many outputs
+    assert!(!TxInfo::new(&tx_with(10, &[100, 200, 300]))
+        .unwrap()
+        .potentially_consolidation());
+    // neither enough inputs nor few enough outputs
+    assert!(!TxInfo::new(&tx_with(9, &[100, 200, 300]))
+        .unwrap()
+        .potentially_consolidation());
+    // a plain one-input one-output transaction
+    assert!(!tx_info(testdata::TX_1IN_1OUT).potentially_consolidation());
 }
 
 /// The sigops counted while building the [TxInfo] agree with the sigops
