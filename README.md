@@ -11,6 +11,17 @@ This includes, for example:
 
 In its current state, this crate should be considerd as 'unfinished' and 'under development'.
 
+## Testing
+
+Run the unit and integration tests with `cargo test`. The optional
+Counterparty detection code and its tests are only compiled with the
+`counterparty` feature enabled, so please also run
+`cargo test --features counterparty`.
+
+Mutation tests are run with [cargo-mutants](https://mutants.rs)
+(`cargo install cargo-mutants`, then `cargo mutants`). The checked-in
+`.cargo/mutants.toml` turns on the `counterparty` feature.
+
 ## License
 
 Licensed under either of
