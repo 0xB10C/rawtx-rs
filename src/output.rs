@@ -480,7 +480,7 @@ impl OutputTypeDetection for TxOut {
             return false;
         }
 
-        if !self.script_pubkey.as_bytes()[0] == 0x6A {
+        if self.script_pubkey.as_bytes()[0] != 0x6A {
             return false;
         }
 
@@ -532,11 +532,30 @@ impl OutputSigops for TxOut {
 mod tests {
     use super::{OpReturnFlavor, OutputType, OutputTypeDetection};
     use crate::testdata;
-    use bitcoin::Transaction;
+    use bitcoin::blockdata::opcodes::all as opcodes;
+    use bitcoin::script::{self, PushBytesBuf};
+    use bitcoin::{Amount, ScriptBuf, Transaction, TxOut};
+    use std::convert::TryFrom;
 
     fn decode_tx(hex: &str) -> Transaction {
         let raw = hex::decode(hex).unwrap();
         bitcoin::consensus::deserialize(&raw).unwrap()
+    }
+
+    fn output_with_script(script_pubkey: ScriptBuf) -> TxOut {
+        TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey,
+        }
+    }
+
+    fn opreturn_output(data: &[u8]) -> TxOut {
+        output_with_script(
+            script::Builder::new()
+                .push_opcode(opcodes::OP_RETURN)
+                .push_slice(PushBytesBuf::try_from(data.to_vec()).unwrap())
+                .into_script(),
+        )
     }
 
     #[test]
@@ -724,5 +743,36 @@ mod tests {
                 OutputType::OpReturn(OpReturnFlavor::Runestone)
             );
         }
+    }
+
+    /// A script that is not an OP_RETURN must never be reported as an OP_RETURN
+    /// with a given data length, even when its total length happens to match.
+    /// A 22 byte P2WPKH script (OP_0 OP_PUSHBYTES_20 <20 bytes>) is such a
+    /// case, as 22 - 2 == 20.
+    #[test]
+    fn is_opreturn_with_len_rejects_non_opreturn() {
+        let p2wpkh = output_with_script(ScriptBuf::from_bytes(
+            [vec![0x00, 0x14], vec![0xab; 20]].concat(),
+        ));
+        assert_eq!(p2wpkh.script_pubkey.len(), 22);
+        assert!(!p2wpkh.script_pubkey.is_op_return());
+        assert!(!p2wpkh.is_opreturn_with_len(20));
+    }
+
+    #[test]
+    fn is_opreturn_with_len_matches_pushed_data_length() {
+        // OP_RETURN OP_PUSHBYTES_20 <20 bytes>
+        let twenty = opreturn_output(&[0xab; 20]);
+        assert_eq!(twenty.script_pubkey.len(), 22);
+        assert!(twenty.is_opreturn_with_len(20));
+        assert!(!twenty.is_opreturn_with_len(1));
+        assert!(!twenty.is_opreturn_with_len(80));
+
+        // OP_RETURN OP_PUSHDATA1 0x50 <80 bytes>
+        let eighty = opreturn_output(&[0xab; 80]);
+        assert_eq!(eighty.script_pubkey.len(), 83);
+        assert_eq!(eighty.script_pubkey.as_bytes()[1], 0x4c);
+        assert!(eighty.is_opreturn_with_len(80));
+        assert!(!eighty.is_opreturn_with_len(20));
     }
 }
