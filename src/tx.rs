@@ -268,11 +268,18 @@ impl TxInfo {
         self.output_infos.iter().any(|o| o.value > value)
     }
 
-    /// Returns the sum of all output values
+    /// Returns the sum of all output values.
+    ///
+    /// Transactions can't have more than 21 million bitcoin in their outputs to
+    /// be valid, but a deserialized transaction can have arbitrary output
+    /// values. If the sum of the output values doesn't fit into an [Amount], it
+    /// saturates at [Amount::MAX] instead of panicking.
     pub fn output_value_sum(&self) -> Amount {
         self.output_infos
             .iter()
-            .fold(Amount::from_sat(0), |acc, o| acc + o.value)
+            .fold(Amount::from_sat(0), |acc, o| {
+                acc.checked_add(o.value).unwrap_or(Amount::MAX)
+            })
     }
 }
 pub trait TransactionSigops {
@@ -527,6 +534,28 @@ mod tests {
             value: Amount::from_sat(sat),
             script_pubkey: bitcoin::ScriptBuf::from(script_pubkey.to_vec()),
         }
+    }
+
+    /// A transaction with output values summing up to more than [u64::MAX]
+    /// satoshi can't be valid, but it can be deserialized. Summing the output
+    /// values up must saturate instead of panicking. Found by the `tx_info`
+    /// fuzz target.
+    #[test]
+    fn output_value_sum_saturates_instead_of_overflowing() {
+        use bitcoin::absolute::LockTime;
+        use bitcoin::blockdata::transaction::Version;
+
+        let tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![test_input([0x11u8; 32], 0)],
+            output: vec![
+                test_output(u64::MAX, &[0xaa]),
+                test_output(u64::MAX, &[0xaa]),
+            ],
+        };
+
+        assert_eq!(TxInfo::new(&tx).unwrap().output_value_sum(), Amount::MAX);
     }
 
     /// BIP-69 sorts the inputs by the txid as it is displayed, which is the
