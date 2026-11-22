@@ -417,6 +417,15 @@ pub fn is_p2ms_counterparty(tx: &Transaction) -> bool {
                         first_outpoint_txid.reverse();
                         let key = Key::<U32>::from_slice(&first_outpoint_txid);
 
+                        // The pushes of a P2MS output carrying data don't have
+                        // to be public keys and can be shorter than the
+                        // PUBKEYMARKER, the PAYLOAD_LENGTH and the eight byte
+                        // CounterParty prefix dropped and compared below.
+                        const MIN_PUSH_LEN: usize = 1 + 1 + 8;
+                        if first_pubkey.len() < MIN_PUSH_LEN {
+                            return false;
+                        }
+
                         // expected: PUBKEYMARKER (02 or 03) and payload
                         // drop the PUBKEYMARKER
                         let mut payload: Vec<u8> = first_pubkey.as_bytes()[1..].to_vec();
@@ -1046,6 +1055,49 @@ mod tests {
                 n,
                 m
             );
+        }
+    }
+
+    /// A 1-of-3 P2MS output whose "public key" pushes have the given lengths.
+    #[cfg(feature = "counterparty")]
+    fn multisig_output_with_push_lengths(lengths: [usize; 3]) -> TxOut {
+        use bitcoin::blockdata::opcodes::all::{OP_CHECKMULTISIG, OP_PUSHNUM_1, OP_PUSHNUM_3};
+        use bitcoin::script::{Builder, PushBytesBuf};
+        use std::convert::TryFrom;
+
+        let mut builder = Builder::new().push_opcode(OP_PUSHNUM_1);
+        for length in lengths {
+            let push = PushBytesBuf::try_from(vec![0x02u8; length]).unwrap();
+            builder = builder.push_slice(push);
+        }
+        TxOut {
+            value: Amount::from_sat(1234),
+            script_pubkey: builder
+                .push_opcode(OP_PUSHNUM_3)
+                .push_opcode(OP_CHECKMULTISIG)
+                .into_script(),
+        }
+    }
+
+    /// CounterParty hides its payload in the "public keys" of a 1-of-3 P2MS
+    /// output. The pushes don't have to be public keys, so they can be shorter
+    /// than the public key marker, the payload length and the CounterParty
+    /// prefix the detection looks for. Such outputs must not panic the
+    /// detection.
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_p2ms_counterparty_short_pubkey_pushes() {
+        use crate::output::OutputTypeDetection;
+
+        // a push of up to nine bytes is too short to hold the marker, the
+        // payload length and the eight byte CounterParty prefix
+        for length in 0..=9 {
+            let output = multisig_output_with_push_lengths([length, 33, 33]);
+            assert!(output.is_p2ms(), "the output is a 1-of-3 P2MS output");
+
+            let mut tx = counterparty_p2ms_tx();
+            tx.output = vec![output];
+            assert!(!is_p2ms_counterparty(&tx));
         }
     }
 
