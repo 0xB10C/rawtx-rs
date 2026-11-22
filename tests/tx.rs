@@ -411,6 +411,87 @@ fn potentially_consolidation_boundaries() {
     assert!(!tx_info(testdata::TX_1IN_1OUT).potentially_consolidation());
 }
 
+/// TX_P2PKH has a single 62600 sat output. TX_P2A has a single OP_RETURN
+/// output with a value of zero.
+#[test]
+fn has_non_opreturn_output_smaller_than() {
+    let p2pkh = tx_info(testdata::TX_P2PKH);
+    assert!(p2pkh.has_non_opretrun_output_smaller_than(Amount::from_sat(62601)));
+    assert!(p2pkh.has_non_opretrun_output_smaller_than(Amount::from_sat(100_000)));
+    // the value itself is not smaller than itself
+    assert!(!p2pkh.has_non_opretrun_output_smaller_than(Amount::from_sat(62600)));
+    assert!(!p2pkh.has_non_opretrun_output_smaller_than(Amount::from_sat(1)));
+
+    // OP_RETURN outputs don't count, even though their value is smaller
+    let p2a = tx_info(testdata::TX_P2A);
+    assert!(!p2a.has_non_opretrun_output_smaller_than(Amount::from_sat(1)));
+    assert!(!p2a.has_non_opretrun_output_smaller_than(Amount::from_sat(100_000)));
+
+    // the 0 sat output is an OP_RETURN output, the 546 sat output isn't
+    let mixed = tx_info(testdata::TX_1IN_3OUT_OPRETURN);
+    assert!(!mixed.has_non_opretrun_output_smaller_than(Amount::from_sat(1)));
+    assert!(mixed.has_non_opretrun_output_smaller_than(Amount::from_sat(547)));
+}
+
+/// TX_P2PKH has a single 62600 sat output. TX_P2A has a single output with a
+/// value of zero.
+#[test]
+fn has_output_larger_than() {
+    let p2pkh = tx_info(testdata::TX_P2PKH);
+    assert!(p2pkh.has_output_larger_than(Amount::from_sat(1)));
+    assert!(p2pkh.has_output_larger_than(Amount::from_sat(62599)));
+    // the value itself is not larger than itself
+    assert!(!p2pkh.has_output_larger_than(Amount::from_sat(62600)));
+    assert!(!p2pkh.has_output_larger_than(Amount::from_sat(100_000)));
+
+    // OP_RETURN outputs do count here
+    let opreturn = tx_info(testdata::TX_1IN_3OUT_OPRETURN);
+    assert!(opreturn.has_output_larger_than(Amount::from_sat(545)));
+    assert!(!tx_info(testdata::TX_P2A).has_output_larger_than(Amount::from_sat(0)));
+}
+
+#[test]
+fn output_value_sum() {
+    assert_eq!(
+        tx_info(testdata::TX_P2PKH).output_value_sum(),
+        Amount::from_sat(62600)
+    );
+    // 83110 + 110000 + 641774 + 373495
+    assert_eq!(
+        tx_info(testdata::TX_2IN_4OUT).output_value_sum(),
+        Amount::from_sat(1_208_379)
+    );
+    // OP_RETURN outputs with a value of zero contribute nothing
+    assert_eq!(
+        tx_info(testdata::TX_P2A).output_value_sum(),
+        Amount::from_sat(0)
+    );
+    // 546 + 0 + 19062
+    assert_eq!(
+        tx_info(testdata::TX_1IN_3OUT_OPRETURN).output_value_sum(),
+        Amount::from_sat(19608)
+    );
+    // a transaction without outputs
+    assert_eq!(
+        TxInfo::new(&tx_with(2, &[])).unwrap().output_value_sum(),
+        Amount::from_sat(0)
+    );
+}
+
+#[test]
+fn payments() {
+    // a transaction with only OP_RETURN outputs makes no payment
+    assert_eq!(tx_info(testdata::TX_P2A).payments(), 0);
+    assert_eq!(TxInfo::new(&tx_with(1, &[])).unwrap().payments(), 0);
+    // a single output is counted as a payment, there is no change output
+    assert_eq!(tx_info(testdata::TX_1IN_1OUT).payments(), 1);
+    // one of the outputs is assumed to be a change output
+    assert_eq!(tx_info(testdata::TX_1IN_2OUT).payments(), 1);
+    assert_eq!(tx_info(testdata::TX_2IN_4OUT).payments(), 3);
+    // the OP_RETURN outputs don't count as payments
+    assert_eq!(tx_info(testdata::TX_1IN_6OUT_5OPRETURN).payments(), 1);
+}
+
 /// The sigops counted while building the [TxInfo] agree with the sigops
 /// counted on the [Transaction] itself.
 #[test]
