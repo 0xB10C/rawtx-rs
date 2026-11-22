@@ -1489,4 +1489,167 @@ mod tests {
 
         assert!(InputInfo::new(&input).is_ok());
     }
+
+    /// The x-only public key of the first P2TR output of
+    /// signet 9f3d438ab92e86bd86c64749416df8d3a48bcef97b7c32ccefc2ec4f02caac74.
+    const SCHNORR_PUBKEY: &str = "7a61c588fd357d8ed58f624fa7f97a651d1ac00b53b055e9b852507dd319a3d4";
+
+    /// A 64 byte Schnorr signature: #0 from
+    /// <https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv>
+    const SCHNORR_SIG: &str = "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0";
+
+    /// Wraps the bytes in a script and returns them as a single instruction.
+    fn as_instruction(bytes: &[u8]) -> ScriptBuf {
+        use bitcoin::script::PushBytesBuf;
+        use std::convert::TryFrom;
+
+        bitcoin::script::Builder::new()
+            .push_slice(PushBytesBuf::try_from(bytes.to_vec()).unwrap())
+            .into_script()
+    }
+
+    /// Returns a script holding a single opcode.
+    fn as_opcode_instruction() -> ScriptBuf {
+        bitcoin::script::Builder::new()
+            .push_opcode(super::opcodes::OP_CHECKSIG)
+            .into_script()
+    }
+
+    #[test]
+    fn schnorr_pubkeys_are_32_bytes_on_the_curve() {
+        let key = hex::decode(SCHNORR_PUBKEY).unwrap();
+        assert_eq!(key.len(), 32);
+
+        let mut one_byte_too_long = key.clone();
+        one_byte_too_long.push(0x00);
+
+        // An x coordinate of all one bits is not on the curve.
+        let not_on_curve = vec![0xFFu8; 32];
+        assert!(bitcoin::key::XOnlyPublicKey::from_slice(&not_on_curve).is_err());
+
+        let testcases = [
+            ("a key from a P2TR output", key.clone(), true),
+            ("one byte too short", key[..31].to_vec(), false),
+            ("one byte too long", one_byte_too_long, false),
+            ("not on the curve", not_on_curve, false),
+        ];
+
+        for (name, bytes, expected) in testcases.iter() {
+            // once as a Vec<u8>, once as a [u8] and once as an instruction
+            assert_eq!(bytes.is_schnorr_pubkey(), *expected, "Vec<u8>: {}", name);
+            assert_eq!(
+                bytes.as_slice().is_schnorr_pubkey(),
+                *expected,
+                "[u8]: {}",
+                name
+            );
+
+            let script = as_instruction(bytes);
+            let instructions = super::instructions_as_vec(&script).unwrap();
+            assert_eq!(instructions.len(), 1);
+            assert_eq!(
+                instructions[0].is_schnorr_pubkey(),
+                *expected,
+                "instruction: {}",
+                name
+            );
+        }
+
+        // An opcode is never a public key.
+        let script = as_opcode_instruction();
+        let instructions = super::instructions_as_vec(&script).unwrap();
+        assert!(!instructions[0].is_schnorr_pubkey());
+        assert!(!instructions[0].is_ecdsa_pubkey());
+    }
+
+    #[test]
+    fn schnorr_signatures_are_64_bytes_with_an_optional_sighash_flag() {
+        use super::Signature;
+
+        let sig = hex::decode(SCHNORR_SIG).unwrap();
+        assert_eq!(sig.len(), 64);
+
+        // Without a sighash flag a Schnorr signature is exactly 64 bytes long.
+        assert!(sig.is_schnorr_signature());
+        assert!(sig.as_slice().is_schnorr_signature());
+
+        // One byte shorter is not a Schnorr signature.
+        assert!(!sig[..63].is_schnorr_signature());
+
+        // Neither are 66 bytes, even with a valid sighash flag.
+        let mut two_bytes_too_long = sig.clone();
+        two_bytes_too_long.extend_from_slice(&[0x01, 0x01]);
+        assert_eq!(two_bytes_too_long.len(), 66);
+        assert!(!two_bytes_too_long.is_schnorr_signature());
+
+        // With an explicit sighash flag, only the six defined flags are
+        // accepted.
+        for flag in 0x00u8..=0xFFu8 {
+            let mut with_flag = sig.clone();
+            with_flag.push(flag);
+            assert_eq!(with_flag.len(), 65);
+
+            let expected = matches!(flag, 0x01 | 0x02 | 0x03 | 0x81 | 0x82 | 0x83);
+            assert_eq!(
+                with_flag.is_schnorr_signature(),
+                expected,
+                "Vec<u8> with sighash flag {:#04x}",
+                flag
+            );
+            assert_eq!(
+                with_flag.as_slice().is_schnorr_signature(),
+                expected,
+                "[u8] with sighash flag {:#04x}",
+                flag
+            );
+            assert_eq!(
+                super::SignatureInfo::from_u8_slice_schnorr(&with_flag).is_some(),
+                expected,
+                "signature info with sighash flag {:#04x}",
+                flag
+            );
+        }
+    }
+
+    #[test]
+    fn schnorr_signature_instructions() {
+        use super::{Signature, SignatureInfo};
+
+        let sig = hex::decode(SCHNORR_SIG).unwrap();
+
+        let script = as_instruction(&sig);
+        let instructions = super::instructions_as_vec(&script).unwrap();
+        assert!(instructions[0].is_schnorr_signature());
+        assert!(!instructions[0].is_ecdsa_signature(false));
+
+        let info = SignatureInfo::from_instruction_schnorr(&instructions[0]).unwrap();
+        assert_eq!(info.length, 64);
+        assert_eq!(info.sig_hash, 0x01);
+        assert_eq!(info.der_encoded, DEREncoding::NotApplicable);
+
+        // An opcode is never a signature.
+        let script = as_opcode_instruction();
+        let instructions = super::instructions_as_vec(&script).unwrap();
+        assert!(!instructions[0].is_schnorr_signature());
+        assert!(!instructions[0].is_ecdsa_signature(false));
+        assert!(SignatureInfo::from_instruction_schnorr(&instructions[0]).is_none());
+        assert!(SignatureInfo::from_instruction_ecdsa(&instructions[0]).is_none());
+    }
+
+    #[test]
+    fn is_signature_accepts_both_ecdsa_and_schnorr_signatures() {
+        use super::Signature;
+
+        let ecdsa = ScriptBuf::from_hex(STRICT_DER_SIG).unwrap().into_bytes();
+        assert!(ecdsa.is_signature());
+        assert!(!ecdsa.is_schnorr_signature());
+
+        let schnorr = hex::decode(SCHNORR_SIG).unwrap();
+        assert!(schnorr.is_signature());
+        assert!(!schnorr.is_ecdsa_signature(false));
+
+        // A public key is neither.
+        let pubkey = hex::decode(SCHNORR_PUBKEY).unwrap();
+        assert!(!pubkey.is_signature());
+    }
 }
