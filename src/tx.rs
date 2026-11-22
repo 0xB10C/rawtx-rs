@@ -1058,16 +1058,16 @@ mod tests {
         }
     }
 
-    /// A 1-of-3 P2MS output whose "public key" pushes have the given lengths.
+    /// A 1-of-3 P2MS output with the given "public key" pushes.
     #[cfg(feature = "counterparty")]
-    fn multisig_output_with_push_lengths(lengths: [usize; 3]) -> TxOut {
+    fn multisig_output_with_pushes(pushes: [&[u8]; 3]) -> TxOut {
         use bitcoin::blockdata::opcodes::all::{OP_CHECKMULTISIG, OP_PUSHNUM_1, OP_PUSHNUM_3};
         use bitcoin::script::{Builder, PushBytesBuf};
         use std::convert::TryFrom;
 
         let mut builder = Builder::new().push_opcode(OP_PUSHNUM_1);
-        for length in lengths {
-            let push = PushBytesBuf::try_from(vec![0x02u8; length]).unwrap();
+        for push in pushes {
+            let push = PushBytesBuf::try_from(push.to_vec()).unwrap();
             builder = builder.push_slice(push);
         }
         TxOut {
@@ -1077,6 +1077,13 @@ mod tests {
                 .push_opcode(OP_CHECKMULTISIG)
                 .into_script(),
         }
+    }
+
+    /// A 1-of-3 P2MS output whose "public key" pushes have the given lengths.
+    #[cfg(feature = "counterparty")]
+    fn multisig_output_with_push_lengths(lengths: [usize; 3]) -> TxOut {
+        let pushes = lengths.map(|length| vec![0x02u8; length]);
+        multisig_output_with_pushes([&pushes[0], &pushes[1], &pushes[2]])
     }
 
     /// CounterParty hides its payload in the "public keys" of a 1-of-3 P2MS
@@ -1099,6 +1106,54 @@ mod tests {
             tx.output = vec![output];
             assert!(!is_p2ms_counterparty(&tx));
         }
+    }
+
+    /// The shortest possible P2MS CounterParty message fits in a ten byte
+    /// push: the public key marker, a payload length byte and the eight byte
+    /// CounterParty prefix. One byte less and the prefix no longer fits.
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_p2ms_counterparty_shortest_message() {
+        use crate::output::OutputTypeDetection;
+        use rc4::{consts::U32, Key, KeyInit, Rc4, StreamCipher};
+
+        // CounterParty uses the human readable hex (block-explorer)
+        // representation of the first input's outpoint txid as RC4 key
+        let mut key_bytes = counterparty_p2ms_tx().input[0]
+            .previous_output
+            .txid
+            .to_byte_array();
+        key_bytes.reverse();
+        let key = Key::<U32>::from_slice(&key_bytes);
+
+        // a payload length byte followed by the eight byte CounterParty prefix
+        let mut ciphertext = vec![0x08, 0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59];
+        let mut rc4 = Rc4::new(key);
+        rc4.apply_keystream(&mut ciphertext);
+
+        // the public key marker followed by the encrypted payload
+        let mut first_push = vec![0x02u8];
+        first_push.extend_from_slice(&ciphertext);
+        assert_eq!(first_push.len(), 10);
+
+        let output = multisig_output_with_pushes([&first_push, &[0x02; 33], &[0x02; 33]]);
+        assert!(output.is_p2ms(), "the output is a 1-of-3 P2MS output");
+        let mut tx = counterparty_p2ms_tx();
+        tx.output = vec![output];
+        assert!(
+            is_p2ms_counterparty(&tx),
+            "a ten byte push can hold a CounterParty message"
+        );
+
+        // the same push with the last ciphertext byte dropped is too short
+        let output = multisig_output_with_pushes([&first_push[..9], &[0x02; 33], &[0x02; 33]]);
+        assert!(output.is_p2ms(), "the output is a 1-of-3 P2MS output");
+        let mut tx = counterparty_p2ms_tx();
+        tx.output = vec![output];
+        assert!(
+            !is_p2ms_counterparty(&tx),
+            "a nine byte push can't hold a CounterParty message"
+        );
     }
 
     #[test]
