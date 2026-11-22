@@ -231,10 +231,10 @@ pub fn is_strict_der_encoded_ecdsa_sig(sig: &[u8]) -> DEREncoding {
     //   signature)
 
     // Minimum and maximum size constraints.
-    if sig.len() < 9 {
+    if sig.len() < ECDSA_SIG_MIN_LEN {
         return DEREncoding::SigTooShort;
     }
-    if sig.len() > 73 {
+    if sig.len() > ECDSA_SIG_MAX_STRICT_DER_LEN {
         return DEREncoding::SigTooLong;
     }
 
