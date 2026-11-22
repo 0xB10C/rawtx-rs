@@ -465,9 +465,10 @@ pub fn is_p2sh_counterparty(tx: &Transaction) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::TransactionSigops;
-    use super::TxInfo;
+    use super::{TransactionSigops, TxInfo, TxInfoError};
     use crate::testdata;
+    use crate::{input, output};
+    use bitcoin::script;
     use bitcoin::{Sequence, Transaction};
 
     #[cfg(feature = "counterparty")]
@@ -503,6 +504,75 @@ mod tests {
     fn bip69_compliance_3in_3out_not_compliant() {
         let tx = decode_tx(testdata::TX_BIP69_NOT_COMPLIANT);
         assert!(!TxInfo::new(&tx).unwrap().is_bip69_compliant());
+    }
+
+    #[test]
+    fn txinfo_error_display() {
+        let script_error = script::Error::EarlyEndOfScript;
+
+        assert_eq!(
+            TxInfoError::Input(input::InputError::TypeInfo(script_error.clone())).to_string(),
+            format!(
+                "Transaction input error: {}",
+                input::InputError::TypeInfo(script_error.clone())
+            )
+        );
+        assert_eq!(
+            TxInfoError::Output(output::OutputError::PubkeyInfo(script_error.clone())).to_string(),
+            format!(
+                "Transaction output error: {}",
+                output::OutputError::PubkeyInfo(script_error.clone())
+            )
+        );
+        assert_eq!(
+            TxInfoError::SigOps(script_error.clone()).to_string(),
+            format!("Transaction sigops error: {}", script_error)
+        );
+
+        // The messages name the failing part of the transaction.
+        assert!(
+            TxInfoError::Input(input::InputError::TypeInfo(script_error.clone()))
+                .to_string()
+                .starts_with("Transaction input error: ")
+        );
+        assert!(
+            TxInfoError::Output(output::OutputError::PubkeyInfo(script_error.clone()))
+                .to_string()
+                .starts_with("Transaction output error: ")
+        );
+        assert!(TxInfoError::SigOps(script_error)
+            .to_string()
+            .starts_with("Transaction sigops error: "));
+    }
+
+    #[test]
+    fn txinfo_error_source() {
+        use std::error::Error;
+
+        let script_error = script::Error::EarlyEndOfScript;
+
+        let input_error = input::InputError::TypeInfo(script_error.clone());
+        let error = TxInfoError::Input(input_error.clone());
+        assert_eq!(
+            error.source().unwrap().to_string(),
+            input_error.to_string(),
+            "the input error is the source of the transaction error"
+        );
+
+        let output_error = output::OutputError::PubkeyInfo(script_error.clone());
+        let error = TxInfoError::Output(output_error.clone());
+        assert_eq!(
+            error.source().unwrap().to_string(),
+            output_error.to_string(),
+            "the output error is the source of the transaction error"
+        );
+
+        let error = TxInfoError::SigOps(script_error.clone());
+        assert_eq!(
+            error.source().unwrap().to_string(),
+            script_error.to_string(),
+            "the script error is the source of the transaction error"
+        );
     }
 
     #[test]
