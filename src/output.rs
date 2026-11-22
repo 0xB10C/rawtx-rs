@@ -13,7 +13,7 @@ impl fmt::Display for OutputError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             OutputError::PubkeyInfo(e) => {
-                write!(f, "Could not extract pubkey infos from input: {}", e)
+                write!(f, "Could not extract pubkey infos from output: {}", e)
             }
         }
     }
@@ -104,14 +104,14 @@ impl fmt::Display for OpReturnFlavor {
             OpReturnFlavor::WitnessCommitment => write!(f, "Witness Commitment"),
             OpReturnFlavor::Omni => write!(f, "OP_RETURN (OmniLayer)"),
             OpReturnFlavor::StacksBlockCommit => write!(f, "OP_RETURN (Stacks v2 blockcommit)"),
-            OpReturnFlavor::Len1Byte => write!(f, "OP_RETURN (0 byte)"),
+            OpReturnFlavor::Len1Byte => write!(f, "OP_RETURN (1 byte)"),
             OpReturnFlavor::Len20Byte => write!(f, "OP_RETURN (20 byte)"),
             OpReturnFlavor::Len80Byte => write!(f, "OP_RETURN (80 byte)"),
             OpReturnFlavor::Bip47PaymentCode => write!(f, "OP_RETURN (BIP 47 Payment Code)"),
             OpReturnFlavor::RSKBlock => write!(f, "OP_RETURN (Rootstock merge mining info)"),
             OpReturnFlavor::CoreDao => write!(f, "OP_RETURN (CoreDao delegation info)"),
             OpReturnFlavor::ExSat => write!(f, "OP_RETURN (ExSat info)"),
-            OpReturnFlavor::HathorNetwork => write!(f, "OP_RETURN (HatorNetwork aux_block_hash)"),
+            OpReturnFlavor::HathorNetwork => write!(f, "OP_RETURN (HathorNetwork aux_block_hash)"),
             OpReturnFlavor::Runestone => write!(f, "OP_RETURN (Runestone)"),
         }
     }
@@ -530,7 +530,7 @@ impl OutputSigops for TxOut {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpReturnFlavor, OutputType, OutputTypeDetection};
+    use super::{OpReturnFlavor, OutputError, OutputType, OutputTypeDetection};
     use crate::testdata;
     use bitcoin::blockdata::opcodes::all as opcodes;
     use bitcoin::script::{self, PushBytesBuf};
@@ -774,5 +774,103 @@ mod tests {
         assert_eq!(eighty.script_pubkey.as_bytes()[1], 0x4c);
         assert!(eighty.is_opreturn_with_len(80));
         assert!(!eighty.is_opreturn_with_len(20));
+    }
+
+    #[test]
+    fn opreturn_flavor_display() {
+        let testcases: Vec<(OpReturnFlavor, &str)> = vec![
+            (OpReturnFlavor::Unspecified, "OP_RETURN"),
+            (OpReturnFlavor::WitnessCommitment, "Witness Commitment"),
+            (OpReturnFlavor::Omni, "OP_RETURN (OmniLayer)"),
+            (
+                OpReturnFlavor::StacksBlockCommit,
+                "OP_RETURN (Stacks v2 blockcommit)",
+            ),
+            (OpReturnFlavor::Len1Byte, "OP_RETURN (1 byte)"),
+            (OpReturnFlavor::Len20Byte, "OP_RETURN (20 byte)"),
+            (OpReturnFlavor::Len80Byte, "OP_RETURN (80 byte)"),
+            (
+                OpReturnFlavor::Bip47PaymentCode,
+                "OP_RETURN (BIP 47 Payment Code)",
+            ),
+            (
+                OpReturnFlavor::RSKBlock,
+                "OP_RETURN (Rootstock merge mining info)",
+            ),
+            (
+                OpReturnFlavor::CoreDao,
+                "OP_RETURN (CoreDao delegation info)",
+            ),
+            (OpReturnFlavor::ExSat, "OP_RETURN (ExSat info)"),
+            (
+                OpReturnFlavor::HathorNetwork,
+                "OP_RETURN (HathorNetwork aux_block_hash)",
+            ),
+            (OpReturnFlavor::Runestone, "OP_RETURN (Runestone)"),
+        ];
+        for (flavor, expected) in testcases.iter() {
+            assert_eq!(&flavor.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn output_type_display() {
+        let testcases: Vec<(OutputType, &str)> = vec![
+            (OutputType::P2pk, "P2PK"),
+            (OutputType::P2pkh, "P2PKH"),
+            (OutputType::P2wpkhV0, "P2WPKH v0"),
+            (OutputType::P2ms, "P2MS"),
+            (OutputType::P2sh, "P2SH"),
+            (OutputType::P2wshV0, "P2WSH v0"),
+            (
+                OutputType::OpReturn(OpReturnFlavor::Len1Byte),
+                "OP_RETURN (1 byte)",
+            ),
+            (OutputType::P2tr, "P2TR"),
+            (OutputType::P2a, "P2A"),
+            (OutputType::Unknown, "UNKNOWN"),
+        ];
+        for (out_type, expected) in testcases.iter() {
+            assert_eq!(&out_type.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn output_error_display() {
+        let error = OutputError::PubkeyInfo(script::Error::EarlyEndOfScript);
+        assert_eq!(
+            error.to_string(),
+            "Could not extract pubkey infos from output: unexpected end of script"
+        );
+    }
+
+    #[test]
+    fn output_type_detection_opreturn_data_lengths() {
+        // OP_RETURN OP_PUSHBYTES_1 0x00 pushes one byte of data
+        let one_byte = opreturn_output(&[0x00]);
+        assert_eq!(
+            one_byte.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::Len1Byte)
+        );
+
+        // A bare OP_RETURN pushes no data at all
+        let bare = output_with_script(ScriptBuf::from_bytes(vec![0x6a]));
+        assert_eq!(
+            bare.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::Unspecified)
+        );
+
+        // OP_RETURN OP_0 doesn't push any bytes either
+        let op_return_op_0 = output_with_script(
+            script::Builder::new()
+                .push_opcode(opcodes::OP_RETURN)
+                .push_opcode(opcodes::OP_PUSHBYTES_0)
+                .into_script(),
+        );
+        assert_eq!(op_return_op_0.script_pubkey.len(), 2);
+        assert_eq!(
+            op_return_op_0.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::Unspecified)
+        );
     }
 }
