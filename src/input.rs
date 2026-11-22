@@ -895,6 +895,7 @@ impl InputInscriptionDetection for TxIn {
 
 #[cfg(test)]
 mod tests {
+    use super::opcodes;
     use super::{
         InputError, InputInfo, InputInscriptionDetection, InputMultisigDetection, InputSigops,
         InputType, InputTypeDetection, MultisigInputInfo,
@@ -902,9 +903,56 @@ mod tests {
     use crate::testdata;
     use bitcoin::blockdata::script;
     use bitcoin::Transaction;
+    use std::convert::TryFrom;
 
     fn decode_tx(hex: &str) -> Transaction {
         bitcoin::consensus::deserialize(&hex::decode(hex).unwrap()).unwrap()
+    }
+
+    /// The first input of the given test transaction.
+    fn first_input(hex: &str) -> bitcoin::TxIn {
+        decode_tx(hex).input[0].clone()
+    }
+
+    /// The data pushes in the script_sig of the first input of the given test
+    /// transaction.
+    fn script_sig_pushes(hex: &str) -> Vec<Vec<u8>> {
+        crate::script::instructions_as_vec(&first_input(hex).script_sig)
+            .unwrap()
+            .iter()
+            .map(|instruction| match instruction {
+                script::Instruction::PushBytes(bytes) => bytes.as_bytes().to_vec(),
+                script::Instruction::Op(op) => panic!("unexpected opcode {}", op),
+            })
+            .collect()
+    }
+
+    /// The witness elements of an input.
+    fn witness_elements(input: &bitcoin::TxIn) -> Vec<Vec<u8>> {
+        input
+            .witness
+            .iter()
+            .map(|element| element.to_vec())
+            .collect()
+    }
+
+    /// Builds a script that only pushes the given data.
+    fn push_script(pushes: &[Vec<u8>]) -> bitcoin::ScriptBuf {
+        let mut builder = script::Builder::new();
+        for push in pushes {
+            builder = builder.push_slice(<&script::PushBytes>::try_from(push.as_slice()).unwrap());
+        }
+        builder.into_script()
+    }
+
+    /// An input spending a regular, non-null outpoint with the given script_sig
+    /// and witness.
+    fn input_with(script_sig: bitcoin::ScriptBuf, witness: &[Vec<u8>]) -> bitcoin::TxIn {
+        let mut input = first_input(testdata::TX_P2PKH);
+        assert!(!input.previous_output.is_null());
+        input.script_sig = script_sig;
+        input.witness = bitcoin::Witness::from_slice(witness);
+        input
     }
 
     #[test]
@@ -1242,5 +1290,380 @@ mod tests {
         let in0 = &tx.input[0];
         assert!(in0.is_p2pkh(false).unwrap());
         assert_eq!(in0.get_type().unwrap(), InputType::P2pkhLaxDer);
+    }
+
+    #[test]
+    fn scripthash_input_detection() {
+        let cases = [
+            (testdata::TX_P2SH, true),
+            (testdata::TX_P2SH_RSK, true),
+            (testdata::TX_P2SH_P2WSH, true),
+            (testdata::TX_P2WSH, true),
+            (testdata::TX_P2WSH_NON_MULTISIG, true),
+            (testdata::TX_UNKNOWN_INPUT, true),
+            (testdata::TX_P2PK, false),
+            (testdata::TX_P2PKH, false),
+            (testdata::TX_P2PKH_LAX_DER, false),
+            (testdata::TX_P2MS_1OF2, false),
+            (testdata::TX_P2MS_2OF3, false),
+            (testdata::TX_P2SH_P2WPKH, false),
+            (testdata::TX_P2WPKH, false),
+            (testdata::TX_P2TRKP, false),
+            (testdata::TX_P2TRSP, false),
+            (testdata::TX_P2A, false),
+            (testdata::TX_COINBASE, false),
+            (testdata::TX_COINBASE_WITNESS, false),
+        ];
+
+        for (hex, expected) in cases.iter() {
+            let input = first_input(hex);
+            assert_eq!(
+                input.is_scripthash_input().unwrap(),
+                *expected,
+                "wrong result for a {} input",
+                input.get_type().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn p2pk_input_detection_negatives() {
+        let input = first_input(testdata::TX_P2PK);
+        assert!(input.is_p2pk(true).unwrap());
+        assert!(input.is_p2pk(false).unwrap());
+
+        let signature = script_sig_pushes(testdata::TX_P2PK);
+        assert_eq!(signature.len(), 1);
+
+        // the same script_sig together with a witness is not a P2PK spend
+        let with_witness = input_with(push_script(&signature), &[vec![0x11; 20]]);
+        assert!(!with_witness.is_p2pk(true).unwrap());
+        assert!(!with_witness.is_p2pk(false).unwrap());
+
+        // an empty script_sig without a witness is not a P2PK spend
+        let empty = input_with(bitcoin::ScriptBuf::new(), &[]);
+        assert!(!empty.is_p2pk(true).unwrap());
+        assert!(!empty.is_p2pk(false).unwrap());
+
+        // a P2PKH script_sig pushes a public key as well
+        let p2pkh = first_input(testdata::TX_P2PKH);
+        assert!(!p2pkh.is_p2pk(true).unwrap());
+        assert!(!p2pkh.is_p2pk(false).unwrap());
+
+        // the single push must be a signature
+        let not_a_signature = input_with(push_script(&[vec![0x11; 20]]), &[]);
+        assert!(!not_a_signature.is_p2pk(true).unwrap());
+        assert!(!not_a_signature.is_p2pk(false).unwrap());
+    }
+
+    #[test]
+    fn p2ms_input_detection_signature_count_bounds() {
+        let signature = script_sig_pushes(testdata::TX_P2MS_2OF3)[1].clone();
+        let op_0: Vec<u8> = Vec::new();
+
+        let with_signatures = |count: usize| {
+            let mut pushes = vec![op_0.clone()];
+            for _ in 0..count {
+                pushes.push(signature.clone());
+            }
+            input_with(push_script(&pushes), &[])
+        };
+
+        // an OP_0 on its own is not a P2MS spend
+        assert!(!with_signatures(0).is_p2ms(true).unwrap());
+        // an OP_0 followed by one, two or three signatures is
+        assert!(with_signatures(1).is_p2ms(true).unwrap());
+        assert!(with_signatures(2).is_p2ms(true).unwrap());
+        assert!(with_signatures(3).is_p2ms(true).unwrap());
+        // four signatures are one too many
+        assert!(!with_signatures(4).is_p2ms(true).unwrap());
+
+        // the leading push must be empty
+        let leading_signature =
+            input_with(push_script(&[signature.clone(), signature.clone()]), &[]);
+        assert!(!leading_signature.is_p2ms(true).unwrap());
+
+        // the leading instruction must be a push and not an opcode
+        let leading_opcode = script::Builder::new()
+            .push_opcode(opcodes::OP_NOP)
+            .push_slice(<&script::PushBytes>::try_from(signature.as_slice()).unwrap())
+            .into_script();
+        assert!(!input_with(leading_opcode, &[]).is_p2ms(true).unwrap());
+
+        // everything after the OP_0 must be a signature
+        let not_a_signature = input_with(push_script(&[op_0.clone(), vec![0x11; 20]]), &[]);
+        assert!(!not_a_signature.is_p2ms(true).unwrap());
+
+        // a witness rules out a P2MS spend
+        let with_witness = input_with(push_script(&[op_0, signature]), &[vec![0x11; 20]]);
+        assert!(!with_witness.is_p2ms(true).unwrap());
+    }
+
+    #[test]
+    fn p2pkh_input_detection_negatives() {
+        let pushes = script_sig_pushes(testdata::TX_P2PKH);
+        assert_eq!(pushes.len(), 2);
+        let (signature, pubkey) = (pushes[0].clone(), pushes[1].clone());
+
+        assert!(first_input(testdata::TX_P2PKH).is_p2pkh(true).unwrap());
+
+        // a script_sig with a single push is not a P2PKH spend
+        let p2pk = first_input(testdata::TX_P2PK);
+        assert!(!p2pk.is_p2pkh(true).unwrap());
+        assert!(!p2pk.is_p2pkh(false).unwrap());
+
+        // a third push after the signature and the public key
+        let three_pushes = input_with(
+            push_script(&[signature.clone(), pubkey.clone(), vec![0x11; 4]]),
+            &[],
+        );
+        assert!(!three_pushes.is_p2pkh(true).unwrap());
+
+        // the first push must be a signature
+        let not_a_signature = input_with(push_script(&[vec![0x11; 20], pubkey.clone()]), &[]);
+        assert!(!not_a_signature.is_p2pkh(true).unwrap());
+
+        // the second push must be a public key
+        let not_a_pubkey = input_with(push_script(&[signature.clone(), vec![0x11; 20]]), &[]);
+        assert!(!not_a_pubkey.is_p2pkh(true).unwrap());
+
+        // a witness rules out a P2PKH spend
+        let with_witness = input_with(push_script(&[signature, pubkey]), &[vec![0x11; 20]]);
+        assert!(!with_witness.is_p2pkh(true).unwrap());
+    }
+
+    #[test]
+    fn p2sh_input_detection_rules_out_the_other_legacy_types() {
+        assert!(first_input(testdata::TX_P2SH).is_p2sh().unwrap());
+        assert!(first_input(testdata::TX_UNKNOWN_INPUT).is_p2sh().unwrap());
+
+        let op_0: Vec<u8> = Vec::new();
+        let lax_signature = script_sig_pushes(testdata::TX_P2PKH_LAX_DER)[0].clone();
+
+        // a P2PK and a P2MS script_sig that only parse with lax DER rules
+        let lax_p2pk = input_with(push_script(std::slice::from_ref(&lax_signature)), &[]);
+        assert!(lax_p2pk.is_p2pk(false).unwrap());
+        assert!(!lax_p2pk.is_p2pk(true).unwrap());
+        let lax_p2ms = input_with(push_script(&[op_0, lax_signature]), &[]);
+        assert!(lax_p2ms.is_p2ms(false).unwrap());
+        assert!(!lax_p2ms.is_p2ms(true).unwrap());
+
+        // a coinbase whose script_sig is a plain data push
+        let mut coinbase = input_with(push_script(&[vec![0x11; 8]]), &[]);
+        coinbase.previous_output = bitcoin::OutPoint::null();
+        assert!(coinbase.is_coinbase());
+        assert!(!coinbase.is_p2pkh(false).unwrap());
+        assert!(!coinbase.is_p2pk(false).unwrap());
+        assert!(!coinbase.is_p2ms(false).unwrap());
+
+        // every clause that rules out a P2SH spend, one at a time
+        let cases: Vec<(&str, bitcoin::TxIn)> = vec![
+            ("witness", first_input(testdata::TX_P2SH_P2WPKH)),
+            ("lax DER P2PKH", first_input(testdata::TX_P2PKH_LAX_DER)),
+            ("lax DER P2PK", lax_p2pk),
+            ("lax DER P2MS", lax_p2ms),
+            ("P2PKH", first_input(testdata::TX_P2PKH)),
+            ("P2PK", first_input(testdata::TX_P2PK)),
+            ("P2MS", first_input(testdata::TX_P2MS_2OF3)),
+            ("coinbase", coinbase),
+            ("empty script_sig", first_input(testdata::TX_P2A)),
+        ];
+        for (name, input) in cases.iter() {
+            assert!(
+                !input.is_p2sh().unwrap(),
+                "a {} input was reported as P2SH",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn nested_p2wpkh_input_detection_negatives() {
+        let input = first_input(testdata::TX_P2SH_P2WPKH);
+        assert!(input.is_nested_p2wpkh());
+        let script_sig = input.script_sig.as_bytes().to_vec();
+        assert_eq!(script_sig.len(), 23);
+        let witness = witness_elements(&input);
+        assert_eq!(witness.len(), 2);
+
+        // all three script_sig prefix bytes have to match
+        for i in 0..3 {
+            let mut bytes = script_sig.clone();
+            bytes[i] = bytes[i].wrapping_add(1);
+            let changed = input_with(bitcoin::ScriptBuf::from(bytes), &witness);
+            assert!(
+                !changed.is_nested_p2wpkh(),
+                "script_sig byte {} is not checked",
+                i
+            );
+        }
+
+        // the first witness element must be a strictly DER encoded signature
+        let bad_signature = input_with(
+            input.script_sig.clone(),
+            &[vec![0x11; 20], witness[1].clone()],
+        );
+        assert!(!bad_signature.is_nested_p2wpkh());
+
+        // the second witness element must be a public key
+        let bad_pubkey = input_with(
+            input.script_sig.clone(),
+            &[witness[0].clone(), vec![0x11; 20]],
+        );
+        assert!(!bad_pubkey.is_nested_p2wpkh());
+
+        // the script_sig must be 23 bytes long and the witness must have two elements
+        let short = input_with(
+            bitcoin::ScriptBuf::from(script_sig[..22].to_vec()),
+            &witness,
+        );
+        assert!(!short.is_nested_p2wpkh());
+        let single_element = input_with(input.script_sig.clone(), &witness[..1]);
+        assert!(!single_element.is_nested_p2wpkh());
+
+        // a native P2WPKH input has no script_sig at all
+        assert!(!first_input(testdata::TX_P2WPKH).is_nested_p2wpkh());
+    }
+
+    #[test]
+    fn nested_p2wsh_input_detection_negatives() {
+        let input = first_input(testdata::TX_P2SH_P2WSH);
+        assert!(input.is_nested_p2wsh());
+        let script_sig = input.script_sig.as_bytes().to_vec();
+        assert_eq!(script_sig.len(), 35);
+        let witness = witness_elements(&input);
+
+        // all three script_sig prefix bytes have to match
+        for i in 0..3 {
+            let mut bytes = script_sig.clone();
+            bytes[i] = bytes[i].wrapping_add(1);
+            let changed = input_with(bitcoin::ScriptBuf::from(bytes), &witness);
+            assert!(
+                !changed.is_nested_p2wsh(),
+                "script_sig byte {} is not checked",
+                i
+            );
+        }
+
+        // the script_sig must be 35 bytes long and the witness must not be empty
+        let short = input_with(
+            bitcoin::ScriptBuf::from(script_sig[..34].to_vec()),
+            &witness,
+        );
+        assert!(!short.is_nested_p2wsh());
+        let no_witness = input_with(input.script_sig.clone(), &[]);
+        assert!(!no_witness.is_nested_p2wsh());
+    }
+
+    #[test]
+    fn p2wpkh_input_detection_negatives() {
+        let input = first_input(testdata::TX_P2WPKH);
+        assert!(input.is_p2wpkh());
+        let witness = witness_elements(&input);
+        assert_eq!(witness.len(), 2);
+
+        // the first witness element must be a strictly DER encoded signature
+        let bad_signature = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[vec![0x11; 20], witness[1].clone()],
+        );
+        assert!(!bad_signature.is_p2wpkh());
+
+        // the second witness element must be a public key
+        let bad_pubkey = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[witness[0].clone(), vec![0x11; 20]],
+        );
+        assert!(!bad_pubkey.is_p2wpkh());
+
+        // the witness must have exactly two elements
+        let single_element = input_with(bitcoin::ScriptBuf::new(), &witness[..1]);
+        assert!(!single_element.is_p2wpkh());
+
+        // a nested P2WPKH input has a script_sig
+        assert!(!first_input(testdata::TX_P2SH_P2WPKH).is_p2wpkh());
+    }
+
+    #[test]
+    fn p2wsh_input_detection_negatives() {
+        assert!(first_input(testdata::TX_P2WSH).is_p2wsh());
+        assert!(first_input(testdata::TX_P2WSH_NON_MULTISIG).is_p2wsh());
+
+        // a nested P2WSH input has a script_sig
+        assert!(!first_input(testdata::TX_P2SH_P2WSH).is_p2wsh());
+        // an input without a witness is not a P2WSH spend
+        assert!(!first_input(testdata::TX_P2A).is_p2wsh());
+        // P2WPKH and both taproot spend types are ruled out
+        assert!(!first_input(testdata::TX_P2WPKH).is_p2wsh());
+        assert!(!first_input(testdata::TX_P2TRKP).is_p2wsh());
+        assert!(!first_input(testdata::TX_P2TRSP).is_p2wsh());
+    }
+
+    #[test]
+    fn p2a_input_detection_negatives() {
+        assert!(first_input(testdata::TX_P2A).is_p2a());
+        // an empty script_sig is not enough, the witness must be empty too
+        assert!(!first_input(testdata::TX_P2WPKH).is_p2a());
+        // an empty witness is not enough either
+        assert!(!first_input(testdata::TX_P2PKH).is_p2a());
+    }
+
+    #[test]
+    fn coinbase_detection_needs_a_null_outpoint() {
+        let coinbase = first_input(testdata::TX_COINBASE);
+        assert!(coinbase.is_coinbase());
+        assert!(!coinbase.is_coinbase_witness());
+
+        let coinbase_witness = first_input(testdata::TX_COINBASE_WITNESS);
+        assert!(coinbase_witness.is_coinbase_witness());
+        assert!(!coinbase_witness.is_coinbase());
+
+        // regular inputs are neither
+        let p2pkh = first_input(testdata::TX_P2PKH);
+        assert!(!p2pkh.is_coinbase());
+        assert!(!p2pkh.is_coinbase_witness());
+        let p2wpkh = first_input(testdata::TX_P2WPKH);
+        assert!(!p2wpkh.is_coinbase());
+        assert!(!p2wpkh.is_coinbase_witness());
+
+        // an output index of 0xffffffff on its own is not enough, the spent
+        // txid has to be all zeros as well
+        let mut odd_vout = p2pkh.clone();
+        odd_vout.previous_output.vout = 0xffffffff;
+        assert!(!odd_vout.previous_output.is_null());
+        assert!(!odd_vout.is_coinbase());
+        let mut odd_vout_witness = p2wpkh.clone();
+        odd_vout_witness.previous_output.vout = 0xffffffff;
+        assert!(!odd_vout_witness.is_coinbase_witness());
+    }
+
+    #[test]
+    fn get_type_falls_back_to_p2sh_for_unusual_script_sigs() {
+        let op_0: Vec<u8> = Vec::new();
+        let signature = script_sig_pushes(testdata::TX_P2MS_2OF3)[1].clone();
+
+        // a lone OP_0 has too few pushes for a P2MS spend
+        let only_op_0 = input_with(push_script(std::slice::from_ref(&op_0)), &[]);
+        assert!(!only_op_0.is_p2ms(true).unwrap());
+        assert_eq!(only_op_0.get_type().unwrap(), InputType::P2sh);
+
+        // an OP_0 followed by four signatures has one push too many
+        let mut pushes = vec![op_0];
+        for _ in 0..4 {
+            pushes.push(signature.clone());
+        }
+        let four_signatures = input_with(push_script(&pushes), &[]);
+        assert!(!four_signatures.is_p2ms(true).unwrap());
+        assert_eq!(four_signatures.get_type().unwrap(), InputType::P2sh);
+    }
+
+    #[test]
+    fn coinbase_inputs_count_their_script_sig_sigops() {
+        // this coinbase has one signature operation in its script_sig, which
+        // counts as a legacy sigop and is therefore scaled by four
+        let coinbase = first_input(testdata::TX_COINBASE_2);
+        assert_eq!(coinbase.get_type().unwrap(), InputType::Coinbase);
+        assert_eq!(coinbase.script_sig.count_sigops_legacy(), 1);
+        assert_eq!(coinbase.sigops().unwrap(), 4);
     }
 }
