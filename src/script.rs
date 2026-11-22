@@ -248,20 +248,22 @@ pub fn is_strict_der_encoded_ecdsa_sig(sig: &[u8]) -> DEREncoding {
         return DEREncoding::InvalidCompoundLengthDescriptor;
     }
 
-    // Extract the length of the R element.
-    let len_r: u8 = sig[3];
+    // Extract the length of the R element. The length descriptors are
+    // attacker controlled, so all arithmetic on them is done in usize to
+    // avoid overflowing.
+    let len_r: usize = usize::from(sig[3]);
 
     // Make sure the length of the S element is still inside the signature.
-    if usize::from(5 + len_r) >= sig.len() {
+    if 5 + len_r >= sig.len() {
         return DEREncoding::NoSValueLengthDescriptor;
     }
 
     // Extract the length of the S element.
-    let len_s: u8 = sig[usize::from(5 + len_r)];
+    let len_s: usize = usize::from(sig[5 + len_r]);
 
     // Verify that the length of the signature matches the sum of the length
     // of the elements.
-    if usize::from(len_r + len_s + 7) != sig.len() {
+    if len_r + len_s + 7 != sig.len() {
         return DEREncoding::DescribedLengthMismatch;
     }
 
@@ -288,7 +290,7 @@ pub fn is_strict_der_encoded_ecdsa_sig(sig: &[u8]) -> DEREncoding {
     }
 
     // Check whether the S element is an integer.
-    if sig[usize::from(len_r + 4)] != 0x02 {
+    if sig[len_r + 4] != 0x02 {
         return DEREncoding::SElementNotAnInteger;
     }
 
@@ -298,17 +300,14 @@ pub fn is_strict_der_encoded_ecdsa_sig(sig: &[u8]) -> DEREncoding {
     }
 
     // Negative numbers are not allowed for S.
-    if sig[usize::from(len_r + 6)] & 0x80 > 0 {
+    if sig[len_r + 6] & 0x80 > 0 {
         return DEREncoding::NegativeSValue;
     }
 
     // Null bytes at the start of R are not allowed, unless R would
     // otherwise be interpreted as a negative number.
     #[allow(clippy::nonminimal_bool)]
-    if len_s > 1
-        && (sig[usize::from(len_r + 6)] == 0x00)
-        && !(sig[usize::from(len_r + 7)] & 0x80 > 0)
-    {
+    if len_s > 1 && (sig[len_r + 6] == 0x00) && !(sig[len_r + 7] & 0x80 > 0) {
         return DEREncoding::NullByteAtSValueStart;
     }
 
@@ -1299,5 +1298,142 @@ mod tests {
 
         let sigs = super::SignatureInfo::all_from_with_type(&txin, InputType::P2trsp).unwrap();
         assert!(sigs.is_empty());
+    }
+
+    /// A 73 byte, strictly DER encoded signature taken from input 0 of
+    /// mainnet f4597ab5b6d45ba3a04486f3edf1a27f9f2cc3ab23300eb16d6b7067b8cf47dd.
+    ///
+    /// Layout: 0x30 0x46 | 0x02 0x21 <33 byte R> | 0x02 0x21 <33 byte S> | 0x81
+    const STRICT_DER_SIG: &str = "3046022100eb232172f28bc933f8bd0b5c40c83f98d01792ed45c4832a887d4e95bff3322a022100f4d7ee1d3b8f71995f197ffcdd4e5b2327a735c5edca12724502051f33cb18c081";
+
+    #[test]
+    fn der_encoding_long_r_length_descriptor_does_not_overflow() {
+        use super::is_strict_der_encoded_ecdsa_sig;
+
+        // The R length descriptor (0xFF) is much larger than the signature
+        // itself. Computing `5 + len_r` in a u8 overflows here.
+        let sig: [u8; 9] = [0x30, 0x06, 0x02, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x01];
+
+        assert_eq!(
+            is_strict_der_encoded_ecdsa_sig(&sig),
+            DEREncoding::NoSValueLengthDescriptor
+        );
+    }
+
+    #[test]
+    fn der_encoding_summed_element_lengths_do_not_overflow() {
+        use super::is_strict_der_encoded_ecdsa_sig;
+
+        // len_r (0x20) + len_s (0xF0) + 7 = 279, which overflows a u8.
+        let mut sig: Vec<u8> = vec![0x30, 0x46, 0x02, 0x20];
+        sig.extend_from_slice(&[0x11u8; 32]); // the R value
+        sig.push(0x02); // the S element marker
+        sig.push(0xF0); // the (bogus) S length descriptor
+        sig.extend_from_slice(&[0x22u8; 35]); // filler
+
+        assert_eq!(sig.len(), 73);
+        // the earlier checks need to pass before we reach the summing
+        assert_eq!(usize::from(sig[1]), sig.len() - 3);
+        assert!(5 + usize::from(sig[3]) < sig.len());
+
+        assert_eq!(
+            is_strict_der_encoded_ecdsa_sig(&sig),
+            DEREncoding::DescribedLengthMismatch
+        );
+    }
+
+    #[test]
+    fn der_encoding_table_test() {
+        use super::is_strict_der_encoded_ecdsa_sig;
+
+        let valid = ScriptBuf::from_hex(STRICT_DER_SIG).unwrap().into_bytes();
+        assert_eq!(valid.len(), 73);
+
+        // Returns the known-good signature with single bytes replaced.
+        let patched = |patches: &[(usize, u8)]| -> Vec<u8> {
+            let mut sig = valid.clone();
+            for (index, byte) in patches {
+                sig[*index] = *byte;
+            }
+            sig
+        };
+
+        let mut too_long = valid.clone();
+        too_long.push(0x01);
+
+        let testcases: Vec<(&str, Vec<u8>, DEREncoding)> = vec![
+            ("untouched", valid.clone(), DEREncoding::Valid),
+            ("truncated", valid[..8].to_vec(), DEREncoding::SigTooShort),
+            ("one byte too long", too_long, DEREncoding::SigTooLong),
+            (
+                "compound marker replaced",
+                patched(&[(0, 0x31)]),
+                DEREncoding::NoCompoundMarker,
+            ),
+            (
+                "compound length too small",
+                patched(&[(1, 0x45)]),
+                DEREncoding::InvalidCompoundLengthDescriptor,
+            ),
+            (
+                "R length covers the whole signature",
+                patched(&[(3, 0x44)]),
+                DEREncoding::NoSValueLengthDescriptor,
+            ),
+            (
+                "R length one byte too large",
+                patched(&[(3, 0x22)]),
+                DEREncoding::DescribedLengthMismatch,
+            ),
+            (
+                "R element marker replaced",
+                patched(&[(2, 0x03)]),
+                DEREncoding::RElementNotAnInteger,
+            ),
+            (
+                "zero length R",
+                patched(&[(3, 0x00), (5, 0x42)]),
+                DEREncoding::RLengthIsZero,
+            ),
+            (
+                "R with the highest bit set",
+                patched(&[(4, 0xFF)]),
+                DEREncoding::NegativeRValue,
+            ),
+            (
+                "R with a superfluous null byte",
+                patched(&[(5, 0x01)]),
+                DEREncoding::NullByteAtRValueStart,
+            ),
+            (
+                "S element marker replaced",
+                patched(&[(37, 0x03)]),
+                DEREncoding::SElementNotAnInteger,
+            ),
+            (
+                "zero length S",
+                patched(&[(3, 0x42), (70, 0x02), (71, 0x00)]),
+                DEREncoding::SLengthIsZero,
+            ),
+            (
+                "S with the highest bit set",
+                patched(&[(39, 0x80)]),
+                DEREncoding::NegativeSValue,
+            ),
+            (
+                "S with a superfluous null byte",
+                patched(&[(40, 0x01)]),
+                DEREncoding::NullByteAtSValueStart,
+            ),
+        ];
+
+        for (name, sig, expected) in testcases.iter() {
+            assert_eq!(
+                is_strict_der_encoded_ecdsa_sig(sig),
+                *expected,
+                "testcase: {}",
+                name
+            );
+        }
     }
 }
