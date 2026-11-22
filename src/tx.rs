@@ -912,13 +912,48 @@ mod tests {
         }
     }
 
+    /// The OP_RETURN data has to be longer than the eight byte CounterParty
+    /// prefix, as the prefix alone carries no message.
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_opreturn_counterparty_prefix_length_boundary() {
+        const CNTRPRTY: [u8; 8] = [0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59];
+
+        // exactly the eight byte prefix and nothing else
+        let tx = counterparty_opreturn_tx(&CNTRPRTY);
+        assert_eq!(tx.output[0].script_pubkey.len(), 2 + 8);
+        assert!(!is_opreturn_counterparty(&tx));
+
+        // the prefix plus a single byte of data
+        let mut plaintext = CNTRPRTY.to_vec();
+        plaintext.push(0x00);
+        let tx = counterparty_opreturn_tx(&plaintext);
+        assert_eq!(tx.output[0].script_pubkey.len(), 2 + 9);
+        assert!(is_opreturn_counterparty(&tx));
+
+        // seven bytes of data, shorter than the prefix
+        let tx = counterparty_opreturn_tx(&CNTRPRTY[..7]);
+        assert!(!is_opreturn_counterparty(&tx));
+    }
+
+    /// A CounterParty transaction storing its data in two 1-of-3 P2MS outputs.
+    /// mainnet cf01557d4e6b0eec45d07d871e37253285e33672a3a9c0708a593c096ea98e16
+    #[cfg(feature = "counterparty")]
+    fn counterparty_p2ms_tx() -> Transaction {
+        decode_tx("0100000001b731c05ddc859c44326689fb588e81e054def1baff4cdc368a038abc26e9b197010000008b483045022100926a2470ccee567d806fd9697dbcb8b2ae5525888403132ab6da2bc66b36e8500220170d6ae7b5ea57946eb9f0479a83da96c1622057551059ffd645df8f628410a00141046e2298d86527d08589cf81eefb0857f5dda1167b49d99cf03f3fb2b01098e1e3cedcbb6da3c7dbdc893f15bdef80d51f9b2e3099949e7d7c9bbb2ec1c19aef4effffffff03781e000000000000895121021fab2c6657cd39baaf6fe10d9cb6731a6f221f57c5d65e6c34f69e62ed6aa9d92103fc9831f32e44cd7f8e88af4815d0be5aed5af278f3cc055031ceb16075c7709541046e2298d86527d08589cf81eefb0857f5dda1167b49d99cf03f3fb2b01098e1e3cedcbb6da3c7dbdc893f15bdef80d51f9b2e3099949e7d7c9bbb2ec1c19aef4e53ae781e0000000000008951210306ab2c6657cd39baaf546fe1af06444c763947788b97152d72dfd523a025fd552102b3b65b804142b90bfefb95673ab7cc349c28860addaf6a3d1eafc21310b3038541046e2298d86527d08589cf81eefb0857f5dda1167b49d99cf03f3fb2b01098e1e3cedcbb6da3c7dbdc893f15bdef80d51f9b2e3099949e7d7c9bbb2ec1c19aef4e53ae5bd14200000000001976a914a925bca955a11b6c07c2767acfb3f1dabce7ae5688ac00000000")
+    }
+
+    /// A CounterParty transaction storing its data in a P2SH redeem script.
+    /// testnet 66ca3ba2df81d9c1da8ef4c253fab2ab5eda1db699ab028050c4d261d3716181
+    #[cfg(feature = "counterparty")]
+    fn counterparty_p2sh_tx() -> Transaction {
+        decode_tx("010000000187e88fa930f1843d690db12fdb98b12efc9c52cc27b160aa4d128d82d4e8824500000000fd6201483045022100985cf3628b082c3af81509c048b13bf747251e869aee22133fc7a73dcfdfcc6a0220074fa0d9d1e0151e6f5cf84bccaf83f6f42c51aabec65c123bf327bdc13214a3014d16014ceb434e5452505254590300046f4a2fdff4db96b99f33972f11b9b32b545a824d086f5e1872b887654a3c44e5a3bd811e0ed8e911f58e6f78a50bfaf0e6a8dab23b0c802e7200d5a0d905c96fd8a4bff843c2ecd12b82b12b77e7151cd7928ef940000000584bf050f80000000000000007028000000000000000184746573744000000000000000619d989e5d195cf00000000000000018773656e64696e678000000000000000f0000000003253aac4c2a32b9ba1038bab4ba329030903637b7339039ba3934b7338000000000dc617b106b2cae6800000000533a84c4124ba60000000014f64d7104d2e60752102b1a624aadeb689e79e53c66cb282cbaaf9b381be4436ddcf48f99b5e403f2679ad0075740087ffffffff0100000000000000000e6a0cb18961d65a9207474701a54e00000000")
+    }
+
     #[test]
     #[cfg(feature = "counterparty")]
     fn test_is_p2ms_counterparty_tx() {
-        // mainnet cf01557d4e6b0eec45d07d871e37253285e33672a3a9c0708a593c096ea98e16
-        let raw_tx = hex::decode("0100000001b731c05ddc859c44326689fb588e81e054def1baff4cdc368a038abc26e9b197010000008b483045022100926a2470ccee567d806fd9697dbcb8b2ae5525888403132ab6da2bc66b36e8500220170d6ae7b5ea57946eb9f0479a83da96c1622057551059ffd645df8f628410a00141046e2298d86527d08589cf81eefb0857f5dda1167b49d99cf03f3fb2b01098e1e3cedcbb6da3c7dbdc893f15bdef80d51f9b2e3099949e7d7c9bbb2ec1c19aef4effffffff03781e000000000000895121021fab2c6657cd39baaf6fe10d9cb6731a6f221f57c5d65e6c34f69e62ed6aa9d92103fc9831f32e44cd7f8e88af4815d0be5aed5af278f3cc055031ceb16075c7709541046e2298d86527d08589cf81eefb0857f5dda1167b49d99cf03f3fb2b01098e1e3cedcbb6da3c7dbdc893f15bdef80d51f9b2e3099949e7d7c9bbb2ec1c19aef4e53ae781e0000000000008951210306ab2c6657cd39baaf546fe1af06444c763947788b97152d72dfd523a025fd552102b3b65b804142b90bfefb95673ab7cc349c28860addaf6a3d1eafc21310b3038541046e2298d86527d08589cf81eefb0857f5dda1167b49d99cf03f3fb2b01098e1e3cedcbb6da3c7dbdc893f15bdef80d51f9b2e3099949e7d7c9bbb2ec1c19aef4e53ae5bd14200000000001976a914a925bca955a11b6c07c2767acfb3f1dabce7ae5688ac00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
-        assert!(is_p2ms_counterparty(&tx));
+        assert!(is_p2ms_counterparty(&counterparty_p2ms_tx()));
 
         // mainnet 229028368caadfbab2654f888e919062f117e24da5b3a1974ea9796162191a56
         // OP_RETURN CounterParty tx
@@ -927,12 +962,166 @@ mod tests {
         assert!(!is_p2ms_counterparty(&tx));
     }
 
+    /// A P2MS output requiring `n` of `m` signatures. The pushed "public keys"
+    /// are not real public keys, which P2MS outputs carrying data don't have
+    /// either.
+    #[cfg(feature = "counterparty")]
+    fn multisig_output(n: u8, m: u8) -> TxOut {
+        use bitcoin::blockdata::opcodes::all::{OP_CHECKMULTISIG, OP_PUSHNUM_1};
+        use bitcoin::blockdata::opcodes::Opcode;
+        use bitcoin::script::Builder;
+
+        let push_num = |x: u8| Opcode::from(OP_PUSHNUM_1.to_u8() + x - 1);
+        let mut builder = Builder::new().push_opcode(push_num(n));
+        for i in 0..m {
+            builder = builder.push_slice([0x02u8 + i; 33]);
+        }
+        TxOut {
+            value: Amount::from_sat(1234),
+            script_pubkey: builder
+                .push_opcode(push_num(m))
+                .push_opcode(OP_CHECKMULTISIG)
+                .into_script(),
+        }
+    }
+
+    /// CounterParty only uses 1-of-3 P2MS outputs. Other multisig sizes have
+    /// to be skipped so that a later 1-of-3 output is still found.
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_p2ms_counterparty_skips_other_multisig_sizes() {
+        use crate::output::OutputTypeDetection;
+
+        for (n, m) in [(1u8, 2u8), (2, 3), (2, 2), (3, 3)] {
+            let decoy = multisig_output(n, m);
+            assert!(decoy.is_p2ms(), "the decoy output is a P2MS output");
+
+            // on its own the decoy is not a CounterParty transaction
+            let mut tx = counterparty_p2ms_tx();
+            tx.output = vec![decoy.clone()];
+            assert!(
+                !is_p2ms_counterparty(&tx),
+                "a {}-of-{} P2MS output is not CounterParty",
+                n,
+                m
+            );
+
+            // the 1-of-3 CounterParty output behind the decoy is still found
+            let mut tx = counterparty_p2ms_tx();
+            tx.output.insert(0, decoy);
+            assert!(
+                is_p2ms_counterparty(&tx),
+                "a {}-of-{} P2MS output must not hide the CounterParty output",
+                n,
+                m
+            );
+        }
+    }
+
     #[test]
     #[cfg(feature = "counterparty")]
     fn test_is_p2sh_counterparty_tx() {
-        // testnet 66ca3ba2df81d9c1da8ef4c253fab2ab5eda1db699ab028050c4d261d3716181
-        let raw_tx = hex::decode("010000000187e88fa930f1843d690db12fdb98b12efc9c52cc27b160aa4d128d82d4e8824500000000fd6201483045022100985cf3628b082c3af81509c048b13bf747251e869aee22133fc7a73dcfdfcc6a0220074fa0d9d1e0151e6f5cf84bccaf83f6f42c51aabec65c123bf327bdc13214a3014d16014ceb434e5452505254590300046f4a2fdff4db96b99f33972f11b9b32b545a824d086f5e1872b887654a3c44e5a3bd811e0ed8e911f58e6f78a50bfaf0e6a8dab23b0c802e7200d5a0d905c96fd8a4bff843c2ecd12b82b12b77e7151cd7928ef940000000584bf050f80000000000000007028000000000000000184746573744000000000000000619d989e5d195cf00000000000000018773656e64696e678000000000000000f0000000003253aac4c2a32b9ba1038bab4ba329030903637b7339039ba3934b7338000000000dc617b106b2cae6800000000533a84c4124ba60000000014f64d7104d2e60752102b1a624aadeb689e79e53c66cb282cbaaf9b381be4436ddcf48f99b5e403f2679ad0075740087ffffffff0100000000000000000e6a0cb18961d65a9207474701a54e00000000").unwrap();
-        let tx: Transaction = bitcoin::consensus::deserialize(&raw_tx).unwrap();
-        assert!(is_p2sh_counterparty(&tx));
+        assert!(is_p2sh_counterparty(&counterparty_p2sh_tx()));
+
+        // a transaction without P2SH inputs
+        assert!(!is_p2sh_counterparty(&decode_tx(testdata::TX_P2WPKH)));
+    }
+
+    /// A P2SH input whose redeem script holds the given instructions. The
+    /// script_sig is just the push of the redeem script.
+    #[cfg(feature = "counterparty")]
+    fn p2sh_input_with_redeem_script(script_pushes: usize, leading_opcode: bool) -> TxIn {
+        use bitcoin::blockdata::opcodes::all::OP_DUP;
+        use bitcoin::script::{Builder, PushBytesBuf};
+        use bitcoin::{OutPoint, Sequence, Witness};
+        use std::convert::TryFrom;
+
+        let mut builder = Builder::new();
+        if leading_opcode {
+            builder = builder.push_opcode(OP_DUP);
+        }
+        for _ in 0..script_pushes {
+            builder = builder.push_slice([0x42u8]);
+        }
+        let redeem_script = builder.into_script();
+
+        TxIn {
+            previous_output: OutPoint {
+                txid: bitcoin::Txid::from_byte_array([0x55; 32]),
+                vout: 0,
+            },
+            script_sig: Builder::new()
+                .push_slice(PushBytesBuf::try_from(redeem_script.to_bytes()).unwrap())
+                .into_script(),
+            sequence: Sequence::MAX,
+            witness: Witness::new(),
+        }
+    }
+
+    /// A CounterParty redeem script always holds at least eight instructions.
+    /// Shorter redeem scripts are skipped, so that a CounterParty input behind
+    /// them is still found.
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_p2sh_counterparty_redeem_script_length() {
+        use crate::input::{InputType, InputTypeDetection};
+
+        // a redeem script with seven instructions is too short to hold the
+        // CNTRPRTY prefix and is skipped
+        let short = p2sh_input_with_redeem_script(7, false);
+        assert_eq!(short.get_type().unwrap(), InputType::P2sh);
+        let mut tx = counterparty_p2sh_tx();
+        tx.input.insert(0, short);
+        assert!(
+            is_p2sh_counterparty(&tx),
+            "a short redeem script must not hide the CounterParty input"
+        );
+
+        // a redeem script with eight instructions is long enough to be
+        // checked. It does not start with the CNTRPRTY prefix, so the
+        // transaction is not a CounterParty transaction.
+        let eight = p2sh_input_with_redeem_script(8, false);
+        assert_eq!(eight.get_type().unwrap(), InputType::P2sh);
+        let mut tx = counterparty_p2sh_tx();
+        tx.input.insert(0, eight);
+        assert!(
+            !is_p2sh_counterparty(&tx),
+            "the first long-enough redeem script decides"
+        );
+
+        // a redeem script starting with an opcode instead of a data push is
+        // skipped as well
+        let opcode_first = p2sh_input_with_redeem_script(8, true);
+        assert_eq!(opcode_first.get_type().unwrap(), InputType::P2sh);
+        let mut tx = counterparty_p2sh_tx();
+        tx.input.insert(0, opcode_first);
+        assert!(
+            is_p2sh_counterparty(&tx),
+            "a redeem script starting with an opcode must not hide the CounterParty input"
+        );
+    }
+
+    /// Coinbase transactions are never CounterParty transactions.
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_counterparty_detection_skips_coinbase() {
+        for rawtx in [
+            testdata::TX_COINBASE,
+            testdata::TX_COINBASE_2,
+            testdata::TX_COINBASE_WITNESS,
+        ] {
+            let tx = decode_tx(rawtx);
+            assert!(tx.is_coinbase());
+            assert!(!is_opreturn_counterparty(&tx));
+            assert!(!is_p2ms_counterparty(&tx));
+            assert!(!is_p2sh_counterparty(&tx));
+        }
+
+        // The CounterParty data of a real transaction in a coinbase
+        // transaction is not detected either.
+        let mut tx = counterparty_p2sh_tx();
+        tx.input[0].previous_output = bitcoin::OutPoint::null();
+        assert!(tx.is_coinbase());
+        assert!(!is_p2sh_counterparty(&tx));
     }
 }
