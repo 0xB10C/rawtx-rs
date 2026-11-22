@@ -136,9 +136,15 @@ impl TxInfo {
     }
 
     /// Returns true if the transaction signals explicit RBF replicability by
-    /// having all sequences of the inputs set to a value lower than 0xFFFF_FFFE.
+    /// having the sequence of at least one input set to a value lower than
+    /// 0xFFFF_FFFE.
+    ///
+    /// See [BIP-125](https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki):
+    /// "A transaction is considered to have opted in to allowing replacement of
+    /// itself if any of its inputs have an nSequence number less than
+    /// (0xffffffff - 1)."
     pub fn is_signaling_explicit_rbf_replicability(&self) -> bool {
-        self.input_infos.iter().all(|i| i.sequence.is_rbf())
+        self.input_infos.iter().any(|i| i.sequence.is_rbf())
     }
 
     /// Returns true if at least one input spends either nested or native SegWit.
@@ -439,7 +445,7 @@ mod tests {
     use super::TransactionSigops;
     use super::TxInfo;
     use crate::testdata;
-    use bitcoin::Transaction;
+    use bitcoin::{Sequence, Transaction};
 
     #[cfg(feature = "counterparty")]
     use crate::tx::is_opreturn_counterparty;
@@ -492,6 +498,39 @@ mod tests {
             let tx = decode_tx(c.1);
             assert_eq!(TxInfo::new(&tx).unwrap().payments(), c.0);
         }
+    }
+
+    /// BIP-125 opt-in replace-by-fee only needs a single input with a sequence
+    /// number below 0xFFFFFFFE, not all of them.
+    #[test]
+    fn signaling_explicit_rbf_replicability() {
+        let tx = decode_tx(testdata::TX_BIP69_3IN_4OUT);
+        assert!(tx.input.len() > 1);
+
+        // none of the inputs signals RBF
+        let mut no_rbf = tx.clone();
+        for input in no_rbf.input.iter_mut() {
+            input.sequence = Sequence::MAX;
+        }
+        assert!(!TxInfo::new(&no_rbf)
+            .unwrap()
+            .is_signaling_explicit_rbf_replicability());
+
+        // only the first input signals RBF
+        let mut one_rbf = no_rbf.clone();
+        one_rbf.input[0].sequence = Sequence::ENABLE_RBF_NO_LOCKTIME;
+        assert!(TxInfo::new(&one_rbf)
+            .unwrap()
+            .is_signaling_explicit_rbf_replicability());
+
+        // all inputs signal RBF
+        let mut all_rbf = tx.clone();
+        for input in all_rbf.input.iter_mut() {
+            input.sequence = Sequence::ENABLE_RBF_NO_LOCKTIME;
+        }
+        assert!(TxInfo::new(&all_rbf)
+            .unwrap()
+            .is_signaling_explicit_rbf_replicability());
     }
 
     #[test]
