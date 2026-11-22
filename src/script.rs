@@ -1907,4 +1907,144 @@ mod tests {
         assert_eq!(no_push.get_opcheckmultisig_n_m(), Ok(None));
         assert!(!no_push.is_opcheckmultisig());
     }
+
+    /// Returns the first input of the given raw transaction with an empty
+    /// script_sig and no witness.
+    fn empty_input(rawtx: &str) -> bitcoin::TxIn {
+        let tx: Transaction =
+            bitcoin::consensus::deserialize(&hex::decode(rawtx).unwrap()).unwrap();
+        let mut input = tx.input[0].clone();
+        input.script_sig = ScriptBuf::new();
+        input.witness = bitcoin::Witness::new();
+        input
+    }
+
+    #[test]
+    fn script_hash_redeem_script_is_not_counted_as_a_signature() {
+        use super::SignatureInfo;
+        use crate::input::InputType;
+        use bitcoin::script::PushBytesBuf;
+        use std::convert::TryFrom;
+
+        // The last element of a script hash spend is the redeem or witness
+        // script. Here it happens to be a byte string that parses as a
+        // signature, so only the position tells the two apart.
+        let sig = ScriptBuf::from_hex(STRICT_DER_SIG).unwrap().into_bytes();
+
+        let mut input = empty_input(crate::testdata::TX_P2SH);
+
+        input.script_sig = bitcoin::script::Builder::new()
+            .push_opcode(super::opcodes::OP_PUSHBYTES_0)
+            .push_slice(PushBytesBuf::try_from(sig.clone()).unwrap())
+            .push_slice(PushBytesBuf::try_from(sig.clone()).unwrap())
+            .push_slice(PushBytesBuf::try_from(sig.clone()).unwrap())
+            .into_script();
+        assert_eq!(
+            SignatureInfo::all_from_with_type(&input, InputType::P2sh)
+                .unwrap()
+                .len(),
+            2
+        );
+        input.script_sig = ScriptBuf::new();
+
+        input.witness =
+            bitcoin::Witness::from_slice(&[Vec::new(), sig.clone(), sig.clone(), sig.clone()]);
+        for input_type in [InputType::P2wsh, InputType::P2shP2wsh].iter() {
+            assert_eq!(
+                SignatureInfo::all_from_with_type(&input, *input_type)
+                    .unwrap()
+                    .len(),
+                2,
+                "input type: {:?}",
+                input_type
+            );
+        }
+    }
+
+    #[test]
+    fn signatures_of_a_multisig_input() {
+        use super::SignatureInfo;
+        use crate::input::{InputType, InputTypeDetection};
+
+        // Each of these spends a multisig. The redeem or witness script
+        // holding the public keys must not be counted as a signature.
+        let testcases = [
+            // raw transaction, input type, signatures, public keys
+            (crate::testdata::TX_P2SH, InputType::P2sh, 1, 2),
+            (crate::testdata::TX_P2SH_P2WSH, InputType::P2shP2wsh, 2, 3),
+            (crate::testdata::TX_P2WSH, InputType::P2wsh, 2, 2),
+        ];
+
+        for (rawtx, expected_type, signatures, pubkeys) in testcases.iter() {
+            let tx: Transaction =
+                bitcoin::consensus::deserialize(&hex::decode(rawtx).unwrap()).unwrap();
+            let input = &tx.input[0];
+            assert_eq!(input.get_type().unwrap(), *expected_type);
+
+            let signature_infos = SignatureInfo::all_from(input).unwrap();
+            assert_eq!(
+                signature_infos.len(),
+                *signatures,
+                "input type: {:?}",
+                expected_type
+            );
+            for info in signature_infos.iter() {
+                assert_eq!(info.sig_hash, 0x01);
+                assert_eq!(info.der_encoded, DEREncoding::Valid);
+            }
+
+            let pubkey_infos = PubKeyInfo::from_input(input).unwrap();
+            assert_eq!(
+                pubkey_infos,
+                vec![
+                    PubKeyInfo {
+                        compressed: true,
+                        pubkey_type: PubkeyType::ECDSA
+                    };
+                    *pubkeys
+                ],
+                "input type: {:?}",
+                expected_type
+            );
+        }
+    }
+
+    #[test]
+    fn signatures_and_pubkeys_of_an_input_and_an_output() {
+        use super::SignatureInfo;
+
+        let tx: Transaction =
+            bitcoin::consensus::deserialize(&hex::decode(crate::testdata::TX_P2PKH).unwrap())
+                .unwrap();
+
+        // A P2PKH input has one signature and one public key in its
+        // script_sig.
+        let signature_infos = SignatureInfo::all_from(&tx.input[0]).unwrap();
+        assert_eq!(signature_infos.len(), 1);
+        assert_eq!(signature_infos[0].length, 71);
+        assert_eq!(signature_infos[0].sig_hash, 0x01);
+        assert_eq!(signature_infos[0].der_encoded, DEREncoding::Valid);
+
+        assert_eq!(
+            PubKeyInfo::from_input(&tx.input[0]).unwrap(),
+            vec![PubKeyInfo {
+                compressed: true,
+                pubkey_type: PubkeyType::ECDSA
+            }]
+        );
+        // The P2PKH output only holds a hash of the public key.
+        assert!(PubKeyInfo::from_output(&tx.output[0]).unwrap().is_empty());
+
+        // A P2TR output holds a Schnorr public key.
+        let tx: Transaction =
+            bitcoin::consensus::deserialize(&hex::decode(crate::testdata::TX_P2TR_OUTPUT).unwrap())
+                .unwrap();
+        assert_eq!(
+            PubKeyInfo::from_output(&tx.output[0]).unwrap(),
+            vec![PubKeyInfo {
+                compressed: true,
+                pubkey_type: PubkeyType::Schnorr
+            }]
+        );
+    }
 }
