@@ -468,8 +468,9 @@ mod tests {
     use super::{TransactionSigops, TxInfo, TxInfoError};
     use crate::testdata;
     use crate::{input, output};
+    use bitcoin::hashes::Hash;
     use bitcoin::script;
-    use bitcoin::{Sequence, Transaction};
+    use bitcoin::{Amount, Sequence, Transaction, TxIn, TxOut};
 
     #[cfg(feature = "counterparty")]
     use crate::tx::is_opreturn_counterparty;
@@ -504,6 +505,109 @@ mod tests {
     fn bip69_compliance_3in_3out_not_compliant() {
         let tx = decode_tx(testdata::TX_BIP69_NOT_COMPLIANT);
         assert!(!TxInfo::new(&tx).unwrap().is_bip69_compliant());
+    }
+
+    /// A transaction input spending the output `vout` of the transaction with
+    /// the given internal (not display order) txid bytes.
+    fn test_input(txid_bytes: [u8; 32], vout: u32) -> TxIn {
+        use bitcoin::{OutPoint, ScriptBuf, Sequence, Txid, Witness};
+        TxIn {
+            previous_output: OutPoint {
+                txid: Txid::from_byte_array(txid_bytes),
+                vout,
+            },
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness: Witness::new(),
+        }
+    }
+
+    fn test_output(sat: u64, script_pubkey: &[u8]) -> TxOut {
+        TxOut {
+            value: Amount::from_sat(sat),
+            script_pubkey: bitcoin::ScriptBuf::from(script_pubkey.to_vec()),
+        }
+    }
+
+    /// BIP-69 sorts the inputs by the txid as it is displayed, which is the
+    /// internal byte order reversed.
+    #[test]
+    fn bip69_sorts_inputs_by_displayed_txid() {
+        // displayed as 0100..0000
+        let mut txid_a = [0u8; 32];
+        txid_a[31] = 0x01;
+        // displayed as 0000..0002
+        let mut txid_b = [0u8; 32];
+        txid_b[0] = 0x02;
+
+        // sorted: the txid displayed as 0000..0002 comes first
+        assert!(super::is_bip69_compliant(
+            &[test_input(txid_b, 0), test_input(txid_a, 0)],
+            &[]
+        ));
+        assert!(!super::is_bip69_compliant(
+            &[test_input(txid_a, 0), test_input(txid_b, 0)],
+            &[]
+        ));
+    }
+
+    /// Inputs spending the same transaction are sorted by their output index.
+    #[test]
+    fn bip69_sorts_equal_input_txids_by_vout() {
+        let txid = [0x33u8; 32];
+        assert!(super::is_bip69_compliant(
+            &[test_input(txid, 0), test_input(txid, 1)],
+            &[]
+        ));
+        assert!(!super::is_bip69_compliant(
+            &[test_input(txid, 1), test_input(txid, 0)],
+            &[]
+        ));
+    }
+
+    /// Outputs are sorted by value and, for equal values, by script pubkey.
+    #[test]
+    fn bip69_sorts_outputs_by_value_then_script_pubkey() {
+        assert!(super::is_bip69_compliant(
+            &[],
+            &[test_output(1, &[0xaa]), test_output(2, &[0xaa])]
+        ));
+        assert!(!super::is_bip69_compliant(
+            &[],
+            &[test_output(2, &[0xaa]), test_output(1, &[0xaa])]
+        ));
+        assert!(super::is_bip69_compliant(
+            &[],
+            &[test_output(7, &[0xaa]), test_output(7, &[0xbb])]
+        ));
+        assert!(!super::is_bip69_compliant(
+            &[],
+            &[test_output(7, &[0xbb]), test_output(7, &[0xaa])]
+        ));
+    }
+
+    /// Both the inputs and the outputs have to be sorted.
+    #[test]
+    fn bip69_needs_sorted_inputs_and_sorted_outputs() {
+        let txid = [0x44u8; 32];
+        let sorted_inputs = [test_input(txid, 0), test_input(txid, 1)];
+        let unsorted_inputs = [test_input(txid, 1), test_input(txid, 0)];
+        let sorted_outputs = [test_output(1, &[0xaa]), test_output(2, &[0xaa])];
+        let unsorted_outputs = [test_output(2, &[0xaa]), test_output(1, &[0xaa])];
+
+        assert!(super::is_bip69_compliant(&sorted_inputs, &sorted_outputs));
+        assert!(!super::is_bip69_compliant(
+            &unsorted_inputs,
+            &sorted_outputs
+        ));
+        assert!(!super::is_bip69_compliant(
+            &sorted_inputs,
+            &unsorted_outputs
+        ));
+        assert!(!super::is_bip69_compliant(
+            &unsorted_inputs,
+            &unsorted_outputs
+        ));
     }
 
     #[test]
