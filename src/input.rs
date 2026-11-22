@@ -898,7 +898,8 @@ mod tests {
     use super::opcodes;
     use super::{
         InputError, InputInfo, InputInscriptionDetection, InputMultisigDetection, InputSigops,
-        InputType, InputTypeDetection, MultisigInputInfo,
+        InputType, InputTypeDetection, MultisigInputInfo, TAPROOT_ANNEX_INDICATOR,
+        TAPROOT_LEAF_TAPSCRIPT,
     };
     use crate::testdata;
     use bitcoin::blockdata::script;
@@ -1655,6 +1656,160 @@ mod tests {
         let four_signatures = input_with(push_script(&pushes), &[]);
         assert!(!four_signatures.is_p2ms(true).unwrap());
         assert_eq!(four_signatures.get_type().unwrap(), InputType::P2sh);
+    }
+
+    #[test]
+    fn p2trkp_input_detection_annex_handling() {
+        let input = first_input(testdata::TX_P2TRKP);
+        assert!(input.is_p2trkp());
+        let witness = witness_elements(&input);
+        assert_eq!(witness.len(), 1);
+        let signature = witness[0].clone();
+        let annex = vec![TAPROOT_ANNEX_INDICATOR];
+
+        // a key path spend with an annex
+        let with_annex = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[signature.clone(), annex.clone()],
+        );
+        assert!(with_annex.is_p2trkp());
+
+        // the second element is only an annex when it starts with 0x50
+        let not_an_annex = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[signature.clone(), vec![TAPROOT_ANNEX_INDICATOR + 1]],
+        );
+        assert!(!not_an_annex.is_p2trkp());
+
+        // an empty second element is not an annex either
+        let empty_annex = input_with(bitcoin::ScriptBuf::new(), &[signature.clone(), Vec::new()]);
+        assert!(!empty_annex.is_p2trkp());
+
+        // a key path spend has at most two witness elements
+        let three_elements = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[signature.clone(), signature.clone(), annex.clone()],
+        );
+        assert!(!three_elements.is_p2trkp());
+
+        // the first element must be a schnorr signature
+        let bad_signature = input_with(bitcoin::ScriptBuf::new(), &[vec![0x11; 20]]);
+        assert!(!bad_signature.is_p2trkp());
+        let bad_signature_with_annex =
+            input_with(bitcoin::ScriptBuf::new(), &[vec![0x11; 20], annex]);
+        assert!(!bad_signature_with_annex.is_p2trkp());
+
+        // the same witness together with a script_sig
+        let with_script_sig = input_with(push_script(&[vec![0x11; 4]]), &[signature]);
+        assert!(!with_script_sig.is_p2trkp());
+
+        // an input without a witness
+        assert!(!first_input(testdata::TX_P2A).is_p2trkp());
+    }
+
+    #[test]
+    fn p2trsp_input_detection_control_block_and_annex() {
+        assert!(first_input(testdata::TX_P2TRSP).is_p2trsp());
+
+        let tapscript = push_script(&[vec![0x11; 4]]).into_bytes();
+        let control_block = |len: usize, leaf_version: u8| {
+            let mut block = vec![0u8; len];
+            block[0] = leaf_version;
+            block
+        };
+        let valid = control_block(33, TAPROOT_LEAF_TAPSCRIPT);
+
+        // a script and a control block are enough
+        let minimal = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[tapscript.clone(), valid.clone()],
+        );
+        assert!(minimal.is_p2trsp());
+
+        // a single element is not, even when it is a valid control block
+        let single = input_with(bitcoin::ScriptBuf::new(), std::slice::from_ref(&valid));
+        assert!(!single.is_p2trsp());
+
+        // a control block grows by 32 bytes per merkle path element
+        for len in [33usize, 65, 97] {
+            let input = input_with(
+                bitcoin::ScriptBuf::new(),
+                &[
+                    tapscript.clone(),
+                    control_block(len, TAPROOT_LEAF_TAPSCRIPT),
+                ],
+            );
+            assert!(input.is_p2trsp(), "control block of {} bytes rejected", len);
+        }
+        for len in [1usize, 32, 34, 64, 66] {
+            let input = input_with(
+                bitcoin::ScriptBuf::new(),
+                &[
+                    tapscript.clone(),
+                    control_block(len, TAPROOT_LEAF_TAPSCRIPT),
+                ],
+            );
+            assert!(
+                !input.is_p2trsp(),
+                "control block of {} bytes accepted",
+                len
+            );
+        }
+
+        // the leaf version is read through a mask, so the parity bit in the
+        // lowest position does not matter
+        let odd_parity = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[
+                tapscript.clone(),
+                control_block(33, TAPROOT_LEAF_TAPSCRIPT + 1),
+            ],
+        );
+        assert!(odd_parity.is_p2trsp());
+        // but any other leaf version is not a tapscript
+        let other_leaf_version = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[tapscript.clone(), control_block(33, 0x52)],
+        );
+        assert!(!other_leaf_version.is_p2trsp());
+
+        // a last element starting with 0x50 is an annex, the control block is
+        // then the element before it
+        let with_annex = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[
+                tapscript.clone(),
+                valid.clone(),
+                vec![TAPROOT_ANNEX_INDICATOR],
+            ],
+        );
+        assert!(with_annex.is_p2trsp());
+
+        // an element starting with any other byte is not an annex, so it is
+        // read as the control block
+        let not_an_annex = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[
+                tapscript.clone(),
+                valid.clone(),
+                vec![TAPROOT_ANNEX_INDICATOR + 1],
+            ],
+        );
+        assert!(!not_an_annex.is_p2trsp());
+
+        // an empty last element is not an annex either
+        let empty_last = input_with(
+            bitcoin::ScriptBuf::new(),
+            &[tapscript.clone(), valid.clone(), Vec::new()],
+        );
+        assert!(!empty_last.is_p2trsp());
+
+        // the same witness together with a script_sig
+        let with_script_sig = input_with(push_script(&[vec![0x11; 4]]), &[tapscript, valid]);
+        assert!(!with_script_sig.is_p2trsp());
+
+        // an input without a witness
+        assert!(!first_input(testdata::TX_P2A).is_p2trsp());
     }
 
     #[test]
