@@ -549,6 +549,30 @@ mod tests {
         }
     }
 
+    fn script_output(script_pubkey_bytes: Vec<u8>) -> TxOut {
+        output_with_script(ScriptBuf::from_bytes(script_pubkey_bytes))
+    }
+
+    /// Builds a `n-of-m` P2MS script_pubkey:
+    /// OP_PUSHNUM_n <m * 33-byte push> OP_PUSHNUM_m OP_CHECKMULTISIG
+    fn p2ms_output(n: u8, m: u8) -> TxOut {
+        let mut bytes = vec![opcodes::OP_PUSHNUM_1.to_u8() + n - 1];
+        for _ in 0..m {
+            bytes.push(opcodes::OP_PUSHBYTES_33.to_u8());
+            bytes.extend_from_slice(&[0x02; 33]);
+        }
+        bytes.push(opcodes::OP_PUSHNUM_1.to_u8() + m - 1);
+        bytes.push(opcodes::OP_CHECKMULTISIG.to_u8());
+        script_output(bytes)
+    }
+
+    /// Returns a copy of `bytes` with the byte at `index` replaced by `byte`.
+    fn with_byte_replaced(bytes: &[u8], index: usize, byte: u8) -> Vec<u8> {
+        let mut bytes = bytes.to_vec();
+        bytes[index] = byte;
+        bytes
+    }
+
     fn opreturn_output(data: &[u8]) -> TxOut {
         output_with_script(
             script::Builder::new()
@@ -572,6 +596,84 @@ mod tests {
         let out0 = &tx.output[0];
         assert!(out0.is_p2ms());
         assert_eq!(out0.get_type(), OutputType::P2ms);
+    }
+
+    #[test]
+    fn p2ms_detection_n_of_m_bounds() {
+        // Up to three signatures and three public keys are detected as P2MS,
+        // as long as there are at least as many public keys as signatures.
+        for (n, m) in [(1u8, 1u8), (1, 2), (1, 3), (2, 2), (2, 3), (3, 3)].iter() {
+            let out = p2ms_output(*n, *m);
+            assert!(out.is_p2ms(), "{}-of-{} should be a P2MS output", n, m);
+            assert_eq!(out.get_type(), OutputType::P2ms);
+        }
+
+        // More than three public keys isn't detected as P2MS.
+        for (n, m) in [(1u8, 4u8), (3, 4), (4, 4), (1, 5)].iter() {
+            let out = p2ms_output(*n, *m);
+            assert!(!out.is_p2ms(), "{}-of-{} shouldn't be a P2MS output", n, m);
+            assert_eq!(out.get_type(), OutputType::Unknown);
+        }
+
+        // Asking for more signatures than there are public keys isn't P2MS either.
+        for (n, m) in [(2u8, 1u8), (3, 1), (3, 2)].iter() {
+            let out = p2ms_output(*n, *m);
+            assert!(!out.is_p2ms(), "{}-of-{} shouldn't be a P2MS output", n, m);
+            assert_eq!(out.get_type(), OutputType::Unknown);
+        }
+    }
+
+    #[test]
+    fn p2tr_detection_byte_by_byte() {
+        // OP_PUSHNUM_1 OP_PUSHBYTES_32 <32 bytes>
+        let valid = [vec![0x51, 0x20], vec![0xaa; 32]].concat();
+        let out = script_output(valid.clone());
+        assert_eq!(out.script_pubkey.len(), 34);
+        assert!(out.is_p2tr());
+        assert_eq!(out.get_type(), OutputType::P2tr);
+
+        // witness version 2 instead of version 1
+        let out = script_output(with_byte_replaced(&valid, 0, 0x52));
+        assert!(!out.is_p2tr());
+        assert_eq!(out.get_type(), OutputType::Unknown);
+
+        // OP_PUSHBYTES_33 instead of OP_PUSHBYTES_32
+        let out = script_output(with_byte_replaced(&valid, 1, 0x21));
+        assert_eq!(out.script_pubkey.len(), 34);
+        assert!(!out.is_p2tr());
+
+        // 33 bytes, one byte too short
+        let out = script_output([vec![0x51, 0x20], vec![0xaa; 31]].concat());
+        assert_eq!(out.script_pubkey.len(), 33);
+        assert!(!out.is_p2tr());
+
+        // 35 bytes, one byte too long
+        let out = script_output([vec![0x51, 0x20], vec![0xaa; 33]].concat());
+        assert_eq!(out.script_pubkey.len(), 35);
+        assert!(!out.is_p2tr());
+    }
+
+    #[test]
+    fn p2a_detection_byte_by_byte() {
+        // OP_PUSHNUM_1 OP_PUSHBYTES_2 4e73
+        let valid = vec![0x51, 0x02, 0x4e, 0x73];
+        let out = script_output(valid.clone());
+        assert!(out.is_p2a());
+        assert_eq!(out.get_type(), OutputType::P2a);
+
+        // each of the four bytes is checked
+        for (index, byte) in [(0usize, 0x52u8), (1, 0x03), (2, 0x4f), (3, 0x74)].iter() {
+            let out = script_output(with_byte_replaced(&valid, *index, *byte));
+            assert!(!out.is_p2a(), "byte {} should be checked", index);
+        }
+
+        // one byte too long, even though it starts with the P2A script
+        let out = script_output(vec![0x51, 0x02, 0x4e, 0x73, 0x00]);
+        assert!(!out.is_p2a());
+
+        // one byte too short
+        let out = script_output(vec![0x51, 0x02, 0x4e]);
+        assert!(!out.is_p2a());
     }
 
     #[test]
