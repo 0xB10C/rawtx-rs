@@ -88,8 +88,8 @@ A crashing input is written to `fuzz/artifacts/<target>/crash-<hash>`. Run it
 again and shrink it with:
 
 ```console
-cargo +nightly fuzz run --features libfuzzer tx_info artifacts/tx_info/crash-<hash>
-cargo +nightly fuzz tmin --features libfuzzer tx_info artifacts/tx_info/crash-<hash>
+cargo +nightly fuzz run --features libfuzzer tx_info fuzz/artifacts/tx_info/crash-<hash>
+cargo +nightly fuzz tmin --features libfuzzer tx_info fuzz/artifacts/tx_info/crash-<hash>
 ```
 
 Crashes are turned into regression tests in the main crate, not in this crate:
