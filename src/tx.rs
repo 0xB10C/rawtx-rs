@@ -596,6 +596,25 @@ mod tests {
         }
     }
 
+    /// Bitcoin Core counts the legacy sigops of a coinbase scriptSig in
+    /// GetLegacySigOpCount(), so our sigop count must match the sigop cost
+    /// rust-bitcoin computes for coinbase transactions too.
+    #[test]
+    fn test_coinbase_sigops_match_rust_bitcoin() {
+        let tx_sigops_pairs = [
+            (8usize, testdata::TX_COINBASE_2),
+            (4, testdata::TX_COINBASE),
+        ];
+
+        for (sigops, rawtx) in tx_sigops_pairs.iter() {
+            let tx = decode_tx(rawtx);
+            assert!(tx.is_coinbase());
+            assert_eq!(*sigops, tx.total_sigop_cost(|_| None::<bitcoin::TxOut>));
+            assert_eq!(*sigops, TxInfo::new(&tx).unwrap().sigops());
+            assert_eq!(*sigops, tx.sigops().unwrap());
+        }
+    }
+
     #[test]
     #[cfg(feature = "counterparty")]
     fn test_is_opreturn_counterparty_tx() {
