@@ -19,7 +19,7 @@ jobs:
     - name: Check formatting
       run: cargo fmt --check
     - name: Check clippy suggestions
-      run: cargo clippy -- -Dwarnings
+      run: cargo clippy --all-features --all-targets -- -Dwarnings
     - name: Build
       run: cargo build --verbose --all-features
     - name: Run tests
