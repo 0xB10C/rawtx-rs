@@ -325,21 +325,21 @@ pub fn is_opreturn_counterparty(tx: &Transaction) -> bool {
             // Parsing the script gives us the pushed bytes in both cases.
             let instructions = match instructions_as_vec(&output.script_pubkey) {
                 Ok(instructions) => instructions,
-                Err(_) => return false,
+                Err(_) => continue,
             };
 
             if instructions.len() != 2 {
-                return false;
+                continue;
             }
 
             match instructions[0] {
                 Instruction::Op(op) if op == opcodes::OP_RETURN => (),
-                _ => return false,
+                _ => continue,
             }
 
             let pushed_bytes = match instructions[1] {
                 Instruction::PushBytes(bytes) => bytes.as_bytes(),
-                Instruction::Op(_) => return false,
+                Instruction::Op(_) => continue,
             };
 
             // check if the OP_RETRUN message is long enough to hold the
@@ -586,7 +586,9 @@ mod tests {
         use rc4::{consts::U32, Key, KeyInit, Rc4, StreamCipher};
         use std::convert::TryFrom;
 
-        let txid = Txid::from_byte_array([0x11; 32]);
+        // An asymmetric byte pattern (0x00..=0x1f): a txid that reads the same
+        // forwards and backwards would not catch a key byte-order bug.
+        let txid = Txid::from_byte_array(std::array::from_fn(|i| i as u8));
         let mut key_bytes = txid.to_byte_array();
         key_bytes.reverse();
         let key = Key::<U32>::from_slice(&key_bytes);
@@ -641,6 +643,41 @@ mod tests {
         // 80 bytes of data without the CounterParty prefix
         let tx = counterparty_opreturn_tx(&[0x42; 80]);
         assert!(!is_opreturn_counterparty(&tx));
+    }
+
+    /// Multiple OP_RETURN outputs per transaction are standard. An OP_RETURN
+    /// output that is not shaped like `OP_RETURN <single push>` must not stop
+    /// the scan for the actual CounterParty payload in a later output.
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_opreturn_counterparty_with_leading_junk_opreturn() {
+        use bitcoin::{Amount, ScriptBuf, TxOut};
+
+        const CNTRPRTY: [u8; 8] = [0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59];
+
+        let mut plaintext = CNTRPRTY.to_vec();
+        plaintext.extend_from_slice(&[0x42; 52]);
+
+        // A bare OP_RETURN (no data push at all) and an OP_RETURN followed by
+        // an opcode instead of a data push.
+        for junk in [vec![0x6a], vec![0x6a, 0x51]] {
+            let mut tx = counterparty_opreturn_tx(&plaintext);
+            tx.output.insert(
+                0,
+                TxOut {
+                    value: Amount::from_sat(0),
+                    script_pubkey: ScriptBuf::from_bytes(junk.clone()),
+                },
+            );
+            assert_eq!(tx.input.len(), 1);
+            assert_eq!(tx.output.len(), 2);
+            assert!(tx.output[0].script_pubkey.is_op_return());
+            assert!(
+                is_opreturn_counterparty(&tx),
+                "not detected with leading junk OP_RETURN {}",
+                hex::encode(&junk)
+            );
+        }
     }
 
     #[test]
