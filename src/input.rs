@@ -284,13 +284,19 @@ impl InputSigops for TxIn {
     fn sigops_with_type(&self, in_type: InputType) -> Result<usize, InputError> {
         const SIGOPS_SCALE_FACTOR: usize = 4;
 
-        // in P2TR and P2A scripts and coinbase inputs, no sigops are counted
+        // No sigops are counted in P2TR and P2A scripts.
+        //
+        // For a coinbase input, only the legacy sigops of its scriptSig count:
+        // Bitcoin Core's GetTransactionSigOpCost() starts with
+        // GetLegacySigOpCount(), which walks the scriptSig of every input
+        // including the coinbase, and only afterwards returns early for
+        // coinbase transactions. The witness and P2SH sigops of a coinbase
+        // input are therefore never counted.
         match in_type {
-            InputType::P2a
-            | InputType::P2trkp
-            | InputType::P2trsp
-            | InputType::Coinbase
-            | InputType::CoinbaseWitness => return Ok(0),
+            InputType::P2a | InputType::P2trkp | InputType::P2trsp => return Ok(0),
+            InputType::Coinbase | InputType::CoinbaseWitness => {
+                return Ok(SIGOPS_SCALE_FACTOR * self.script_sig.count_sigops_legacy())
+            }
             _ => (),
         }
 
@@ -1046,6 +1052,25 @@ mod tests {
         let in0 = &tx.input[0];
         assert!(in0.is_coinbase());
         assert_eq!(in0.get_type().unwrap(), InputType::Coinbase);
+    }
+
+    #[test]
+    fn coinbase_input_sigops_counts_script_sig() {
+        // This coinbase scriptSig contains a bare OP_CHECKSIG, which Bitcoin
+        // Core counts in GetLegacySigOpCount() (scaled by four).
+        let tx = decode_tx(testdata::TX_COINBASE_2);
+        let in0 = &tx.input[0];
+        assert_eq!(in0.get_type().unwrap(), InputType::Coinbase);
+        assert_eq!(in0.sigops().unwrap(), 4);
+    }
+
+    #[test]
+    fn coinbase_input_sigops_without_sigop_opcodes() {
+        // This coinbase scriptSig has no sigop opcodes.
+        let tx = decode_tx(testdata::TX_COINBASE);
+        let in0 = &tx.input[0];
+        assert_eq!(in0.get_type().unwrap(), InputType::Coinbase);
+        assert_eq!(in0.sigops().unwrap(), 0);
     }
 
     #[test]
