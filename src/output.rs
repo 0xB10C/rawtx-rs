@@ -228,13 +228,9 @@ impl OutputTypeDetection for TxOut {
     /// `script_pubkey: [ OP_PUSHNUM_1  <32-byte pubkey> ]`
     fn is_p2tr(&self) -> bool {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
-        if script_pubkey_bytes.len() == 34
+        script_pubkey_bytes.len() == 34
             && script_pubkey_bytes[0] == opcodes::OP_PUSHNUM_1.to_u8()
             && script_pubkey_bytes[1] == opcodes::OP_PUSHBYTES_32.to_u8()
-        {
-            return true;
-        }
-        false
     }
 
     /// Checks if an output pays to a P2A script.
@@ -257,17 +253,13 @@ impl OutputTypeDetection for TxOut {
     /// can be found in [BIP-141](https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki#commitment-structure).
     fn is_witness_commitment(&self) -> bool {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
-        if script_pubkey_bytes.len() >= 38
+        script_pubkey_bytes.len() >= 38
             && script_pubkey_bytes[0] == 0x6A
             && script_pubkey_bytes[1] == 0x24
             && script_pubkey_bytes[2] == 0xAA
             && script_pubkey_bytes[3] == 0x21
             && script_pubkey_bytes[4] == 0xA9
             && script_pubkey_bytes[5] == 0xED
-        {
-            return true;
-        }
-        false
     }
 
     /// Checks if an output is a OP_RETURN output meeting the requirements for a OmniLayer transaction.
@@ -297,17 +289,13 @@ impl OutputTypeDetection for TxOut {
     /// https://forum.stacks.org/t/op-return-outputs/12000
     fn is_opreturn_stacks_blockcommit(&self) -> bool {
         let script_pubkey_bytes = self.script_pubkey.as_bytes();
-        if script_pubkey_bytes.len() == 83
+        script_pubkey_bytes.len() == 83
             && script_pubkey_bytes[0] == 0x6A
             && script_pubkey_bytes[1] == 0x4C
             && script_pubkey_bytes[2] == 0x50
             && script_pubkey_bytes[3] == 0x58
             && script_pubkey_bytes[4] == 0x32
             && script_pubkey_bytes[5] == 0x5b
-        {
-            return true;
-        }
-        false
     }
 
     /// Checks if an output is a OP_RETURN output meeting the requirements
@@ -356,10 +344,7 @@ impl OutputTypeDetection for TxOut {
         }
         // Bytes 67-79 - reserved for future expansion, zero-filled
         let reserved_bytes = &payload[67..80];
-        if !reserved_bytes.iter().all(|&b| b == 0) {
-            return false;
-        }
-        true
+        reserved_bytes.iter().all(|&b| b == 0)
     }
 
     /// Checks if an output is an OP_RETURN output meeting the requirements
