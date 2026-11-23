@@ -590,11 +590,7 @@ impl InputTypeDetection for TxIn {
             Ok(ins) => ins,
             Err(e) => return Err(InputError::TypeInfo(e)),
         };
-        if instructions.len() != 1 || !instructions[0].is_ecdsa_signature(strict_der_sig) {
-            return Ok(false);
-        }
-
-        Ok(true)
+        Ok(instructions.len() == 1 && instructions[0].is_ecdsa_signature(strict_der_sig))
     }
 
     /// Checks if an input spends an P2MS output.
@@ -675,14 +671,9 @@ impl InputTypeDetection for TxIn {
             Ok(ins) => ins,
             Err(e) => return Err(InputError::TypeInfo(e)),
         };
-        if instructions.len() != 2
-            || !instructions[0].is_ecdsa_signature(strict_der_sig)
-            || !instructions[1].is_pubkey()
-        {
-            return Ok(false);
-        }
-
-        Ok(true)
+        Ok(instructions.len() == 2
+            && instructions[0].is_ecdsa_signature(strict_der_sig)
+            && instructions[1].is_pubkey())
     }
 
     /// Checks if an input spends a P2SH output.
@@ -696,7 +687,7 @@ impl InputTypeDetection for TxIn {
     ///
     /// Returns a [`script::Error`] if the script can't be parsed.
     fn is_p2sh(&self) -> Result<bool, InputError> {
-        if self.has_witness()
+        let is_other_input_type = self.has_witness()
             || self.is_p2pkh(false)?
             || self.is_p2pk(false)?
             || self.is_p2ms(false)?
@@ -704,12 +695,9 @@ impl InputTypeDetection for TxIn {
             || self.is_p2pk(true)?
             || self.is_p2ms(true)?
             || self.is_coinbase()
-            || self.script_sig.is_empty()
-        {
-            return Ok(false);
-        }
+            || self.script_sig.is_empty();
 
-        Ok(true)
+        Ok(!is_other_input_type)
     }
 
     /// Checks if an input spends a Nested P2WPKH output.
@@ -757,13 +745,9 @@ impl InputTypeDetection for TxIn {
         }
 
         let script_sig = self.script_sig.as_bytes();
-        if script_sig[0] == opcodes::OP_PUSHBYTES_34.to_u8()
+        script_sig[0] == opcodes::OP_PUSHBYTES_34.to_u8()
             && script_sig[1] == opcodes::OP_PUSHBYTES_0.to_u8()
             && script_sig[2] == opcodes::OP_PUSHBYTES_32.to_u8()
-        {
-            return true;
-        }
-        false
     }
 
     /// Checks if an input spends a P2WPKH output.
@@ -796,16 +780,11 @@ impl InputTypeDetection for TxIn {
     /// `script_sig: [ ]`
     /// `witness: [ .. ]`
     fn is_p2wsh(&self) -> bool {
-        if !self.script_sig.is_empty()
-            || !self.has_witness()
-            || self.is_p2wpkh()
-            || self.is_p2trkp()
-            || self.is_p2trsp()
-        {
-            return false;
-        }
-
-        true
+        self.script_sig.is_empty()
+            && self.has_witness()
+            && !self.is_p2wpkh()
+            && !self.is_p2trkp()
+            && !self.is_p2trsp()
     }
 
     /// Checks if an input spends a P2TR-keypath output.
