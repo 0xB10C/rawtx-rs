@@ -559,7 +559,13 @@ impl SignatureInfo {
                 } else {
                     2
                 };
-                for bytes in input.witness.iter().take(input.witness.len() - to_drop) {
+                // The input type is passed in by the caller and might not match the
+                // witness, so the witness can be shorter than the items we drop.
+                for bytes in input
+                    .witness
+                    .iter()
+                    .take(input.witness.len().saturating_sub(to_drop))
+                {
                     if let Some(signature_info) = SignatureInfo::from_u8_slice_schnorr(bytes) {
                         signature_infos.push(signature_info);
                     }
@@ -1260,5 +1266,38 @@ mod tests {
             1,
             "annex must be excluded; only the actual signature should be counted"
         );
+    }
+
+    /// Regression test: `all_from_with_type()` trusts the input type passed by
+    /// the caller. A caller can pass `P2trsp` for a witness that `is_p2trsp()`
+    /// rejects, for example a two item witness holding only a control block and
+    /// an annex. Dropping three items from a two item witness must not underflow.
+    #[test]
+    fn signature_info_all_from_with_type_p2trsp_short_witness_with_annex() {
+        use crate::input::{InputType, InputTypeDetection};
+        use bitcoin::{OutPoint, Sequence, TxIn, Witness};
+
+        // Witness layout: [ control_block, annex ]
+        let mut control_block = vec![0xc0u8];
+        control_block.extend_from_slice(&[0u8; 32]);
+        let annex = vec![0x50u8, 0x00u8];
+
+        let witness = Witness::from_slice(&[control_block.as_slice(), annex.as_slice()]);
+
+        let txin = TxIn {
+            previous_output: OutPoint::new(
+                bitcoin::Txid::from_raw_hash(bitcoin::hashes::Hash::from_byte_array([1u8; 32])),
+                0,
+            ),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness,
+        };
+
+        // The classifier does not treat this witness as a P2TR script-path spend.
+        assert!(!txin.is_p2trsp());
+
+        let sigs = super::SignatureInfo::all_from_with_type(&txin, InputType::P2trsp).unwrap();
+        assert!(sigs.is_empty());
     }
 }
