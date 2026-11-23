@@ -81,7 +81,7 @@ const SPENDING_TYPE_EXPECTATIONS: &[(&str, &str, &[&str])] = &[
         testdata::TX_P2SH,
         &["only_spending_legacy", "spending_multisig"],
     ),
-    // three P2SH inputs, one of them with a script too short to be classified
+    // three identical P2SH inputs, each with a short, unusual script_sig
     (
         "TX_UNKNOWN_INPUT",
         testdata::TX_UNKNOWN_INPUT,
@@ -362,8 +362,8 @@ fn potentially_coinjoin_boundaries() {
     );
 }
 
-/// Of all test transactions only TX_P2TR_OUTPUT, which pays four equal
-/// amounts to five outputs, looks like a coinjoin.
+/// Of all test transactions only TX_P2TR_OUTPUT, which pays the same amount to
+/// three of its four outputs, looks like a coinjoin.
 #[test]
 fn potentially_coinjoin_on_test_transactions() {
     assert!(tx_info(testdata::TX_P2TR_OUTPUT).potentially_coinjoin());

@@ -233,8 +233,8 @@ impl TxInfo {
 
     /// Returns true if the transaction could be a equal-output-value coinjoin.
     /// Coinjoins require at least two inputs and at least two outputs. We also
-    /// require more than two outputs to share the same value and at least a
-    /// third of the outputs to have that value.
+    /// require more than two outputs to share the same value and at least
+    /// `outputs / 3` outputs (integer division) to have that value.
     pub fn potentially_coinjoin(&self) -> bool {
         if !(self.input_infos.len() < 2 || self.output_infos.len() < 2) {
             let mut a: HashMap<Amount, usize> = HashMap::new();
@@ -985,8 +985,10 @@ mod tests {
         }
     }
 
-    /// CounterParty only uses 1-of-3 P2MS outputs. Other multisig sizes have
-    /// to be skipped so that a later 1-of-3 output is still found.
+    /// CounterParty only uses 1-of-3 P2MS outputs. Multisig outputs of other
+    /// sizes are skipped, so that a 1-of-3 output behind them is still found.
+    /// A 1-of-3 output is not skipped: the detection decides on the first one
+    /// it comes across, whatever that output contains.
     #[test]
     #[cfg(feature = "counterparty")]
     fn test_is_p2ms_counterparty_skips_other_multisig_sizes() {
@@ -1060,7 +1062,8 @@ mod tests {
 
     /// A CounterParty redeem script always holds at least eight instructions.
     /// Shorter redeem scripts are skipped, so that a CounterParty input behind
-    /// them is still found.
+    /// them is still found. The current implementation then only examines the
+    /// first input whose redeem script is long enough.
     #[test]
     #[cfg(feature = "counterparty")]
     fn test_is_p2sh_counterparty_redeem_script_length() {
@@ -1086,7 +1089,7 @@ mod tests {
         tx.input.insert(0, eight);
         assert!(
             !is_p2sh_counterparty(&tx),
-            "the first long-enough redeem script decides"
+            "the current implementation only examines the first input with a long enough redeem script"
         );
 
         // a redeem script starting with an opcode instead of a data push is
