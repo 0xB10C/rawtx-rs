@@ -231,10 +231,10 @@ pub fn is_strict_der_encoded_ecdsa_sig(sig: &[u8]) -> DEREncoding {
     //   signature)
 
     // Minimum and maximum size constraints.
-    if sig.len() < 9 {
+    if sig.len() < ECDSA_SIG_MIN_LEN {
         return DEREncoding::SigTooShort;
     }
-    if sig.len() > 73 {
+    if sig.len() > ECDSA_SIG_MAX_STRICT_DER_LEN {
         return DEREncoding::SigTooLong;
     }
 
@@ -1488,5 +1488,563 @@ mod tests {
         assert_ne!(signature_infos[0].der_encoded, DEREncoding::Valid);
 
         assert!(InputInfo::new(&input).is_ok());
+    }
+
+    /// The x-only public key of the first P2TR output of
+    /// signet 9f3d438ab92e86bd86c64749416df8d3a48bcef97b7c32ccefc2ec4f02caac74.
+    const SCHNORR_PUBKEY: &str = "7a61c588fd357d8ed58f624fa7f97a651d1ac00b53b055e9b852507dd319a3d4";
+
+    /// A 64 byte Schnorr signature: #0 from
+    /// <https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv>
+    const SCHNORR_SIG: &str = "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0";
+
+    /// Wraps the bytes in a script and returns them as a single instruction.
+    fn as_instruction(bytes: &[u8]) -> ScriptBuf {
+        use bitcoin::script::PushBytesBuf;
+        use std::convert::TryFrom;
+
+        bitcoin::script::Builder::new()
+            .push_slice(PushBytesBuf::try_from(bytes.to_vec()).unwrap())
+            .into_script()
+    }
+
+    /// Returns a script holding a single opcode.
+    fn as_opcode_instruction() -> ScriptBuf {
+        bitcoin::script::Builder::new()
+            .push_opcode(super::opcodes::OP_CHECKSIG)
+            .into_script()
+    }
+
+    #[test]
+    fn schnorr_pubkeys_are_32_bytes_on_the_curve() {
+        let key = hex::decode(SCHNORR_PUBKEY).unwrap();
+        assert_eq!(key.len(), 32);
+
+        let mut one_byte_too_long = key.clone();
+        one_byte_too_long.push(0x00);
+
+        // An x coordinate of all one bits is not on the curve.
+        let not_on_curve = vec![0xFFu8; 32];
+        assert!(bitcoin::key::XOnlyPublicKey::from_slice(&not_on_curve).is_err());
+
+        let testcases = [
+            ("a key from a P2TR output", key.clone(), true),
+            ("one byte too short", key[..31].to_vec(), false),
+            ("one byte too long", one_byte_too_long, false),
+            ("not on the curve", not_on_curve, false),
+        ];
+
+        for (name, bytes, expected) in testcases.iter() {
+            // once as a Vec<u8>, once as a [u8] and once as an instruction
+            assert_eq!(bytes.is_schnorr_pubkey(), *expected, "Vec<u8>: {}", name);
+            assert_eq!(
+                bytes.as_slice().is_schnorr_pubkey(),
+                *expected,
+                "[u8]: {}",
+                name
+            );
+
+            let script = as_instruction(bytes);
+            let instructions = super::instructions_as_vec(&script).unwrap();
+            assert_eq!(instructions.len(), 1);
+            assert_eq!(
+                instructions[0].is_schnorr_pubkey(),
+                *expected,
+                "instruction: {}",
+                name
+            );
+        }
+
+        // An opcode is never a public key.
+        let script = as_opcode_instruction();
+        let instructions = super::instructions_as_vec(&script).unwrap();
+        assert!(!instructions[0].is_schnorr_pubkey());
+        assert!(!instructions[0].is_ecdsa_pubkey());
+    }
+
+    #[test]
+    fn schnorr_signatures_are_64_bytes_with_an_optional_sighash_flag() {
+        use super::Signature;
+
+        let sig = hex::decode(SCHNORR_SIG).unwrap();
+        assert_eq!(sig.len(), 64);
+
+        // Without a sighash flag a Schnorr signature is exactly 64 bytes long.
+        assert!(sig.is_schnorr_signature());
+        assert!(sig.as_slice().is_schnorr_signature());
+
+        // One byte shorter is not a Schnorr signature.
+        assert!(!sig[..63].is_schnorr_signature());
+
+        // Neither are 66 bytes, even with a valid sighash flag.
+        let mut two_bytes_too_long = sig.clone();
+        two_bytes_too_long.extend_from_slice(&[0x01, 0x01]);
+        assert_eq!(two_bytes_too_long.len(), 66);
+        assert!(!two_bytes_too_long.is_schnorr_signature());
+
+        // With an explicit sighash flag, only the six defined flags are
+        // accepted.
+        for flag in 0x00u8..=0xFFu8 {
+            let mut with_flag = sig.clone();
+            with_flag.push(flag);
+            assert_eq!(with_flag.len(), 65);
+
+            let expected = matches!(flag, 0x01 | 0x02 | 0x03 | 0x81 | 0x82 | 0x83);
+            assert_eq!(
+                with_flag.is_schnorr_signature(),
+                expected,
+                "Vec<u8> with sighash flag {:#04x}",
+                flag
+            );
+            assert_eq!(
+                with_flag.as_slice().is_schnorr_signature(),
+                expected,
+                "[u8] with sighash flag {:#04x}",
+                flag
+            );
+            assert_eq!(
+                super::SignatureInfo::from_u8_slice_schnorr(&with_flag).is_some(),
+                expected,
+                "signature info with sighash flag {:#04x}",
+                flag
+            );
+        }
+    }
+
+    #[test]
+    fn schnorr_signature_instructions() {
+        use super::{Signature, SignatureInfo};
+
+        let sig = hex::decode(SCHNORR_SIG).unwrap();
+
+        let script = as_instruction(&sig);
+        let instructions = super::instructions_as_vec(&script).unwrap();
+        assert!(instructions[0].is_schnorr_signature());
+        assert!(!instructions[0].is_ecdsa_signature(false));
+
+        let info = SignatureInfo::from_instruction_schnorr(&instructions[0]).unwrap();
+        assert_eq!(info.length, 64);
+        assert_eq!(info.sig_hash, 0x01);
+        assert_eq!(info.der_encoded, DEREncoding::NotApplicable);
+
+        // An opcode is never a signature.
+        let script = as_opcode_instruction();
+        let instructions = super::instructions_as_vec(&script).unwrap();
+        assert!(!instructions[0].is_schnorr_signature());
+        assert!(!instructions[0].is_ecdsa_signature(false));
+        assert!(SignatureInfo::from_instruction_schnorr(&instructions[0]).is_none());
+        assert!(SignatureInfo::from_instruction_ecdsa(&instructions[0]).is_none());
+    }
+
+    #[test]
+    fn is_signature_accepts_both_ecdsa_and_schnorr_signatures() {
+        use super::Signature;
+
+        let ecdsa = ScriptBuf::from_hex(STRICT_DER_SIG).unwrap().into_bytes();
+        assert!(ecdsa.is_signature());
+        assert!(!ecdsa.is_schnorr_signature());
+
+        let schnorr = hex::decode(SCHNORR_SIG).unwrap();
+        assert!(schnorr.is_signature());
+        assert!(!schnorr.is_ecdsa_signature(false));
+
+        // A public key is neither.
+        let pubkey = hex::decode(SCHNORR_PUBKEY).unwrap();
+        assert!(!pubkey.is_signature());
+    }
+
+    /// The shortest signature we accept: the R and the S value are a single
+    /// byte each. Together with the sighash flag that's nine bytes.
+    ///
+    /// Layout: 0x30 0x06 | 0x02 0x01 0x01 | 0x02 0x01 0x01 | 0x01
+    const MIN_LEN_DER_SIG: [u8; 9] = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01, 0x01];
+
+    /// A 123 byte signature with 52 bytes of padding after the DER encoded
+    /// part, taken from input 0 of mainnet
+    /// 23befff6eea3dded0e34574af65c266c9398e7d7d9d07022bf1cd526c5cdbc94.
+    /// This is the longest signature we accept.
+    const LAX_DER_SIG: &str = "304502210099d6f5897eec6f2c4aeb3ccb43dc19f45f4a43372fd68a9e835bec463159e6620220365d554d87d656907af6a9c98768900c7e8cfbd3352d108c48d383cd6b08f6a02a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a01";
+
+    #[test]
+    fn ecdsa_signature_length_limits() {
+        use super::{Signature, SignatureInfo};
+
+        // The shortest signature we accept is nine bytes long.
+        assert!(MIN_LEN_DER_SIG[..].is_ecdsa_signature(false));
+        assert!(MIN_LEN_DER_SIG[..].is_ecdsa_signature(true));
+        let info = SignatureInfo::from_u8_slice_ecdsa(&MIN_LEN_DER_SIG).unwrap();
+        assert_eq!(info.length, 9);
+        assert_eq!(info.sig_hash, 0x01);
+        assert_eq!(info.der_encoded, DEREncoding::Valid);
+
+        // One byte less and it's too short.
+        assert!(!MIN_LEN_DER_SIG[..8].is_ecdsa_signature(false));
+        assert!(!MIN_LEN_DER_SIG[..8].is_ecdsa_signature(true));
+        assert!(SignatureInfo::from_u8_slice_ecdsa(&MIN_LEN_DER_SIG[..8]).is_none());
+
+        // A strictly DER encoded signature is at most 73 bytes long.
+        let strict = ScriptBuf::from_hex(STRICT_DER_SIG).unwrap().into_bytes();
+        assert_eq!(strict.len(), 73);
+        assert!(strict.is_ecdsa_signature(true));
+
+        let mut strict_too_long = strict.clone();
+        strict_too_long.push(0x01);
+        assert_eq!(strict_too_long.len(), 74);
+        assert!(!strict_too_long.is_ecdsa_signature(true));
+        // Without the strict DER requirement the same bytes are accepted.
+        assert!(strict_too_long.is_ecdsa_signature(false));
+
+        // A non-strict signature is at most 123 bytes long.
+        let lax = ScriptBuf::from_hex(LAX_DER_SIG).unwrap().into_bytes();
+        assert_eq!(lax.len(), 123);
+        assert!(lax.is_ecdsa_signature(false));
+        assert!(!lax.is_ecdsa_signature(true));
+        assert!(SignatureInfo::from_u8_slice_ecdsa(&lax).is_some());
+
+        let mut lax_too_long = lax.clone();
+        lax_too_long.push(0x01);
+        assert_eq!(lax_too_long.len(), 124);
+        assert!(!lax_too_long.is_ecdsa_signature(false));
+        assert!(!lax_too_long.is_ecdsa_signature(true));
+        assert!(SignatureInfo::from_u8_slice_ecdsa(&lax_too_long).is_none());
+    }
+
+    #[test]
+    fn der_encoding_of_single_byte_r_and_s_values() {
+        use super::is_strict_der_encoded_ecdsa_sig;
+
+        // A single null byte is the shortest encoding of a zero value, so the
+        // "no null byte at the start" rule must not apply to it.
+        let zero_r: [u8; 9] = [0x30, 0x06, 0x02, 0x01, 0x00, 0x02, 0x01, 0x01, 0x01];
+        assert_eq!(
+            is_strict_der_encoded_ecdsa_sig(&zero_r),
+            DEREncoding::Valid,
+            "a single null byte as the R value"
+        );
+
+        let zero_s: [u8; 9] = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x01];
+        assert_eq!(
+            is_strict_der_encoded_ecdsa_sig(&zero_s),
+            DEREncoding::Valid,
+            "a single null byte as the S value"
+        );
+    }
+
+    #[test]
+    fn ecdsa_signatures_are_parsed_without_the_sighash_flag() {
+        use super::SignatureInfo;
+        use bitcoin::secp256k1::ecdsa;
+
+        // The compound length descriptor (0x08) claims all of the remaining
+        // bytes, including the one that is the sighash flag. Only parsing the
+        // signature with the sighash flag still attached makes this succeed.
+        let sig: [u8; 10] = [0x30, 0x08, 0x02, 0x01, 0x01, 0x02, 0x03, 0x01, 0x01, 0x01];
+        assert!(ecdsa::Signature::from_der_lax(&sig).is_ok());
+        assert!(ecdsa::Signature::from_der_lax(&sig[..sig.len() - 1]).is_err());
+
+        assert!(SignatureInfo::from_u8_slice_ecdsa(&sig).is_none());
+    }
+
+    /// Builds a SignatureInfo for an ECDSA signature with the given R and S
+    /// values.
+    fn ecdsa_signature_info(r: [u8; 32], s: [u8; 32]) -> super::SignatureInfo {
+        use super::{SignatureInfo, SignatureType};
+        use bitcoin::secp256k1::ecdsa;
+
+        let mut compact = [0u8; 64];
+        compact[..32].copy_from_slice(&r);
+        compact[32..].copy_from_slice(&s);
+
+        SignatureInfo {
+            signature: SignatureType::Ecdsa(ecdsa::Signature::from_compact(&compact).unwrap()),
+            der_encoded: DEREncoding::Valid,
+            sig_hash: 0x01,
+            length: 71,
+        }
+    }
+
+    #[test]
+    fn low_r_and_low_s_boundaries() {
+        // A low R value has its highest bit unset, which means it is encoded
+        // in 32 bytes rather than 33.
+        let mut just_below_threshold = [0xFFu8; 32];
+        just_below_threshold[0] = 0x7F;
+
+        let mut at_threshold = [0x00u8; 32];
+        at_threshold[0] = 0x80;
+
+        let mut above_threshold = at_threshold;
+        above_threshold[31] = 0x01;
+
+        // A small, valid S value that is well below the half curve order.
+        let mut small_s = [0x00u8; 32];
+        small_s[31] = 0x01;
+
+        let testcases = [
+            ("just below the threshold", just_below_threshold, true),
+            ("exactly at the threshold", at_threshold, false),
+            ("above the threshold", above_threshold, false),
+        ];
+
+        for (name, r, expected) in testcases.iter() {
+            let info = ecdsa_signature_info(*r, small_s);
+            assert_eq!(info.low_r(), *expected, "low r: {}", name);
+            assert!(info.low_s(), "low s: {}", name);
+        }
+
+        // An S value is low as long as it isn't larger than half the curve
+        // order.
+        let half_curve_order = super::SECP256K1_HALF_CURVE_ORDER;
+        let mut one_above = half_curve_order;
+        one_above[31] += 1;
+        let mut one_below = half_curve_order;
+        one_below[31] -= 1;
+
+        assert!(ecdsa_signature_info(small_s, one_below).low_s());
+        assert!(ecdsa_signature_info(small_s, half_curve_order).low_s());
+        assert!(!ecdsa_signature_info(small_s, one_above).low_s());
+    }
+
+    /// A compressed public key, taken from the P2MS output of signet
+    /// 9becb93a15ab4b47eaca85c852d4309f82a28677a0a557df3c0fa6b82ef9293d.
+    const COMPRESSED_PUBKEY: &str =
+        "03c0e0bf0bbcdc53be9542359aeb1dde7c6289743b7b3460c12e2d57a478c6e489";
+
+    /// Builds a `<n> <pubkey>.. <m> OP_CHECKMULTISIG` script from the opcodes
+    /// in the n and m slots and the number of public keys in between.
+    fn multisig_script(
+        n: bitcoin::opcodes::Opcode,
+        pubkeys: usize,
+        m: bitcoin::opcodes::Opcode,
+    ) -> ScriptBuf {
+        use bitcoin::script::PushBytesBuf;
+        use std::convert::TryFrom;
+
+        let pubkey = hex::decode(COMPRESSED_PUBKEY).unwrap();
+        let mut builder = bitcoin::script::Builder::new().push_opcode(n);
+        for _ in 0..pubkeys {
+            builder = builder.push_slice(PushBytesBuf::try_from(pubkey.clone()).unwrap());
+        }
+        builder
+            .push_opcode(m)
+            .push_opcode(super::opcodes::OP_CHECKMULTISIG)
+            .into_script()
+    }
+
+    #[test]
+    fn multisig_n_and_m_push_opcodes() {
+        use super::opcodes::{
+            OP_NOP, OP_PUSHBYTES_0, OP_PUSHNUM_1, OP_PUSHNUM_16, OP_PUSHNUM_2, OP_PUSHNUM_3,
+            OP_PUSHNUM_NEG1,
+        };
+
+        let testcases = [
+            ("1-of-1", OP_PUSHNUM_1, 1, OP_PUSHNUM_1, Some((1, 1))),
+            ("2-of-3", OP_PUSHNUM_2, 3, OP_PUSHNUM_3, Some((2, 3))),
+            ("16-of-16", OP_PUSHNUM_16, 16, OP_PUSHNUM_16, Some((16, 16))),
+            // n is larger than m
+            ("3-of-2", OP_PUSHNUM_3, 2, OP_PUSHNUM_2, None),
+            // the number of public keys doesn't match m
+            ("2-of-3 with 4 keys", OP_PUSHNUM_2, 4, OP_PUSHNUM_3, None),
+            ("2-of-3 with 2 keys", OP_PUSHNUM_2, 2, OP_PUSHNUM_3, None),
+            // the opcode in the n or m slot is just below the push number
+            // opcodes
+            ("OP_1NEGATE as n", OP_PUSHNUM_NEG1, 3, OP_PUSHNUM_3, None),
+            ("OP_1NEGATE as m", OP_PUSHNUM_3, 3, OP_PUSHNUM_NEG1, None),
+            // .. or just above them
+            ("OP_NOP as n", OP_NOP, 3, OP_PUSHNUM_3, None),
+            ("OP_NOP as m", OP_PUSHNUM_3, 3, OP_NOP, None),
+            // OP_0 pushes an empty byte vector rather than being an opcode
+            ("OP_0 as n", OP_PUSHBYTES_0, 3, OP_PUSHNUM_3, None),
+            ("OP_0 as m", OP_PUSHNUM_3, 3, OP_PUSHBYTES_0, None),
+        ];
+
+        for (name, n, pubkeys, m, expected) in testcases.iter() {
+            let script = multisig_script(*n, *pubkeys, *m);
+            assert_eq!(
+                script.get_opcheckmultisig_n_m(),
+                Ok(*expected),
+                "testcase: {}",
+                name
+            );
+            assert_eq!(script.is_opcheckmultisig(), expected.is_some(), "{}", name);
+        }
+
+        // An empty script isn't a multisig script either.
+        let empty = ScriptBuf::new();
+        assert_eq!(empty.get_opcheckmultisig_n_m(), Ok(None));
+        assert!(!empty.is_opcheckmultisig());
+    }
+
+    #[test]
+    fn multisig_needs_at_least_one_data_push_between_n_and_m() {
+        use super::opcodes::{OP_NOP, OP_PUSHNUM_1, OP_PUSHNUM_2};
+        use bitcoin::script::PushBytesBuf;
+        use std::convert::TryFrom;
+
+        let pubkey = hex::decode(COMPRESSED_PUBKEY).unwrap();
+
+        // Not every element between the push number opcodes has to be a data
+        // push, one is enough. The last one is checked here, so that the end
+        // of the range matters.
+        let one_push = bitcoin::script::Builder::new()
+            .push_opcode(OP_PUSHNUM_1)
+            .push_opcode(OP_NOP)
+            .push_slice(PushBytesBuf::try_from(pubkey).unwrap())
+            .push_opcode(OP_PUSHNUM_2)
+            .push_opcode(super::opcodes::OP_CHECKMULTISIG)
+            .into_script();
+        assert_eq!(one_push.get_opcheckmultisig_n_m(), Ok(Some((1, 2))));
+
+        // Without any data push it's not considered a multisig script.
+        let no_push = bitcoin::script::Builder::new()
+            .push_opcode(OP_PUSHNUM_1)
+            .push_opcode(OP_NOP)
+            .push_opcode(OP_NOP)
+            .push_opcode(OP_PUSHNUM_2)
+            .push_opcode(super::opcodes::OP_CHECKMULTISIG)
+            .into_script();
+        assert_eq!(no_push.get_opcheckmultisig_n_m(), Ok(None));
+        assert!(!no_push.is_opcheckmultisig());
+    }
+
+    /// Returns the first input of the given raw transaction with an empty
+    /// script_sig and no witness.
+    fn empty_input(rawtx: &str) -> bitcoin::TxIn {
+        let tx: Transaction =
+            bitcoin::consensus::deserialize(&hex::decode(rawtx).unwrap()).unwrap();
+        let mut input = tx.input[0].clone();
+        input.script_sig = ScriptBuf::new();
+        input.witness = bitcoin::Witness::new();
+        input
+    }
+
+    #[test]
+    fn script_hash_redeem_script_is_not_counted_as_a_signature() {
+        use super::SignatureInfo;
+        use crate::input::InputType;
+        use bitcoin::script::PushBytesBuf;
+        use std::convert::TryFrom;
+
+        // The last element of a script hash spend is the redeem or witness
+        // script. Here it happens to be a byte string that parses as a
+        // signature, so only the position tells the two apart.
+        let sig = ScriptBuf::from_hex(STRICT_DER_SIG).unwrap().into_bytes();
+
+        let mut input = empty_input(crate::testdata::TX_P2SH);
+
+        input.script_sig = bitcoin::script::Builder::new()
+            .push_opcode(super::opcodes::OP_PUSHBYTES_0)
+            .push_slice(PushBytesBuf::try_from(sig.clone()).unwrap())
+            .push_slice(PushBytesBuf::try_from(sig.clone()).unwrap())
+            .push_slice(PushBytesBuf::try_from(sig.clone()).unwrap())
+            .into_script();
+        assert_eq!(
+            SignatureInfo::all_from_with_type(&input, InputType::P2sh)
+                .unwrap()
+                .len(),
+            2
+        );
+        input.script_sig = ScriptBuf::new();
+
+        input.witness =
+            bitcoin::Witness::from_slice(&[Vec::new(), sig.clone(), sig.clone(), sig.clone()]);
+        for input_type in [InputType::P2wsh, InputType::P2shP2wsh].iter() {
+            assert_eq!(
+                SignatureInfo::all_from_with_type(&input, *input_type)
+                    .unwrap()
+                    .len(),
+                2,
+                "input type: {:?}",
+                input_type
+            );
+        }
+    }
+
+    #[test]
+    fn signatures_of_a_multisig_input() {
+        use super::SignatureInfo;
+        use crate::input::{InputType, InputTypeDetection};
+
+        // Each of these spends a multisig. The redeem or witness script
+        // holding the public keys must not be counted as a signature.
+        let testcases = [
+            // raw transaction, input type, signatures, public keys
+            (crate::testdata::TX_P2SH, InputType::P2sh, 1, 2),
+            (crate::testdata::TX_P2SH_P2WSH, InputType::P2shP2wsh, 2, 3),
+            (crate::testdata::TX_P2WSH, InputType::P2wsh, 2, 2),
+        ];
+
+        for (rawtx, expected_type, signatures, pubkeys) in testcases.iter() {
+            let tx: Transaction =
+                bitcoin::consensus::deserialize(&hex::decode(rawtx).unwrap()).unwrap();
+            let input = &tx.input[0];
+            assert_eq!(input.get_type().unwrap(), *expected_type);
+
+            let signature_infos = SignatureInfo::all_from(input).unwrap();
+            assert_eq!(
+                signature_infos.len(),
+                *signatures,
+                "input type: {:?}",
+                expected_type
+            );
+            for info in signature_infos.iter() {
+                assert_eq!(info.sig_hash, 0x01);
+                assert_eq!(info.der_encoded, DEREncoding::Valid);
+            }
+
+            let pubkey_infos = PubKeyInfo::from_input(input).unwrap();
+            assert_eq!(
+                pubkey_infos,
+                vec![
+                    PubKeyInfo {
+                        compressed: true,
+                        pubkey_type: PubkeyType::ECDSA
+                    };
+                    *pubkeys
+                ],
+                "input type: {:?}",
+                expected_type
+            );
+        }
+    }
+
+    #[test]
+    fn signatures_and_pubkeys_of_an_input_and_an_output() {
+        use super::SignatureInfo;
+
+        let tx: Transaction =
+            bitcoin::consensus::deserialize(&hex::decode(crate::testdata::TX_P2PKH).unwrap())
+                .unwrap();
+
+        // A P2PKH input has one signature and one public key in its
+        // script_sig.
+        let signature_infos = SignatureInfo::all_from(&tx.input[0]).unwrap();
+        assert_eq!(signature_infos.len(), 1);
+        assert_eq!(signature_infos[0].length, 71);
+        assert_eq!(signature_infos[0].sig_hash, 0x01);
+        assert_eq!(signature_infos[0].der_encoded, DEREncoding::Valid);
+
+        assert_eq!(
+            PubKeyInfo::from_input(&tx.input[0]).unwrap(),
+            vec![PubKeyInfo {
+                compressed: true,
+                pubkey_type: PubkeyType::ECDSA
+            }]
+        );
+        // The P2PKH output only holds a hash of the public key.
+        assert!(PubKeyInfo::from_output(&tx.output[0]).unwrap().is_empty());
+
+        // A P2TR output holds a Schnorr public key.
+        let tx: Transaction =
+            bitcoin::consensus::deserialize(&hex::decode(crate::testdata::TX_P2TR_OUTPUT).unwrap())
+                .unwrap();
+        assert_eq!(
+            PubKeyInfo::from_output(&tx.output[0]).unwrap(),
+            vec![PubKeyInfo {
+                compressed: true,
+                pubkey_type: PubkeyType::Schnorr
+            }]
+        );
     }
 }

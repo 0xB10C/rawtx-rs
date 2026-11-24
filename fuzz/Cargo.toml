@@ -1,0 +1,65 @@
+[package]
+name = "rawtx-rs-fuzz"
+version = "0.0.0"
+authors = ["0xB10C <0xb10c@gmail.com>"]
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Detach the fuzz crate from the parent workspace. The fuzz targets are only
+# buildable with a nightly toolchain, so they shouldn't be part of the normal
+# build.
+[workspace]
+
+[dependencies]
+rawtx-rs = { path = "..", features = ["counterparty"] }
+arbitrary = { version = "1", features = ["derive"] }
+hex = "0.4"
+# Only needed for the libFuzzer binaries, see the `libfuzzer` feature below.
+libfuzzer-sys = { version = "0.4", optional = true }
+
+[features]
+# The fuzz target binaries are gated behind this feature so that
+# `cargo test` works on a stable toolchain without building libFuzzer.
+# `cargo fuzz` commands have to pass `--features libfuzzer`.
+libfuzzer = ["libfuzzer-sys"]
+
+[[bin]]
+name = "tx_info"
+path = "fuzz_targets/tx_info.rs"
+test = false
+doc = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "tx_in"
+path = "fuzz_targets/tx_in.rs"
+test = false
+doc = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "tx_out"
+path = "fuzz_targets/tx_out.rs"
+test = false
+doc = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "signature"
+path = "fuzz_targets/signature.rs"
+test = false
+doc = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "multisig_script"
+path = "fuzz_targets/multisig_script.rs"
+test = false
+doc = false
+required-features = ["libfuzzer"]
+
+[profile.release]
+debug = 1

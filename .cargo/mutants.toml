@@ -1,0 +1,3 @@
+# Configuration for cargo-mutants (https://mutants.rs)
+# Run with: nix-shell --run 'cargo mutants'
+additional_cargo_args = ["--features", "counterparty"]

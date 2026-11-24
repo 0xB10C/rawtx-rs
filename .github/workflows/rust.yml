@@ -24,3 +24,44 @@ jobs:
       run: cargo build --verbose --all-features
     - name: Run tests
       run: cargo test --verbose --all-features
+
+  # Builds and runs the fuzzing harnesses as ordinary tests on stable. The
+  # fuzz target binaries are behind the 'libfuzzer' feature, so this doesn't
+  # need a nightly toolchain.
+  fuzz-smoke:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+    - name: Check formatting
+      run: cargo fmt --check --manifest-path fuzz/Cargo.toml
+    - name: Check clippy suggestions
+      run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -Dwarnings
+    - name: Run tests
+      run: cargo test --verbose --manifest-path fuzz/Cargo.toml
+
+  # Runs each fuzz target for a short time. This won't find much, but it makes
+  # sure the targets keep working and catches crashes reachable from the seed
+  # corpus.
+  fuzz:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@nightly
+    - name: Install cargo-fuzz
+      run: cargo install cargo-fuzz
+    - name: Write the seed corpus
+      run: cargo test --manifest-path fuzz/Cargo.toml -- --ignored write_seed_corpus
+    - name: Fuzz the transaction target
+      run: cargo fuzz run --features libfuzzer tx_info -- -max_total_time=30
+    - name: Fuzz the input target
+      run: cargo fuzz run --features libfuzzer tx_in -- -max_total_time=30
+    - name: Fuzz the output target
+      run: cargo fuzz run --features libfuzzer tx_out -- -max_total_time=30
+    - name: Fuzz the signature target
+      run: cargo fuzz run --features libfuzzer signature -- -max_total_time=30
+    - name: Fuzz the multisig script target
+      run: cargo fuzz run --features libfuzzer multisig_script -- -max_total_time=30
