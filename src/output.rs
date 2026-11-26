@@ -92,6 +92,11 @@ pub enum OpReturnFlavor {
     /// A HathorNetwork (https://hathor.network/) coinbase OP_RETURN marker.
     /// Documented on https://github.com/HathorNetwork/rfcs/blob/master/text/0006-merged-mining-with-bitcoin.md
     HathorNetwork,
+    /// A Syscoin (https://syscoin.org) coinbase OP_RETURN marker. It's the
+    /// AuxPoW merge mining commitment carrying the aux root and the Syscoin
+    /// block height.
+    /// Documented as `pchSyscoinHeader` in https://github.com/syscoin/syscoin/blob/master/src/auxpow.h
+    Syscoin,
     /// A Ordinals Runestone
     /// Documented on https://docs.ordinals.com/runes.html
     Runestone,
@@ -112,6 +117,7 @@ impl fmt::Display for OpReturnFlavor {
             OpReturnFlavor::CoreDao => write!(f, "OP_RETURN (CoreDao delegation info)"),
             OpReturnFlavor::ExSat => write!(f, "OP_RETURN (ExSat info)"),
             OpReturnFlavor::HathorNetwork => write!(f, "OP_RETURN (HathorNetwork aux_block_hash)"),
+            OpReturnFlavor::Syscoin => write!(f, "OP_RETURN (Syscoin merge mining info)"),
             OpReturnFlavor::Runestone => write!(f, "OP_RETURN (Runestone)"),
         }
     }
@@ -151,6 +157,7 @@ pub trait OutputTypeDetection {
     fn is_opreturn_coredao(&self) -> bool;
     fn is_opreturn_exsat(&self) -> bool;
     fn is_opreturn_hathor(&self) -> bool;
+    fn is_opreturn_syscoin(&self) -> bool;
     fn is_opreturn_runestone(&self) -> bool;
 }
 
@@ -185,6 +192,8 @@ impl OutputTypeDetection for TxOut {
                 return OutputType::OpReturn(OpReturnFlavor::ExSat);
             } else if self.is_opreturn_hathor() {
                 return OutputType::OpReturn(OpReturnFlavor::HathorNetwork);
+            } else if self.is_opreturn_syscoin() {
+                return OutputType::OpReturn(OpReturnFlavor::Syscoin);
             } else if self.is_opreturn_runestone() {
                 return OutputType::OpReturn(OpReturnFlavor::Runestone);
             } else if self.is_opreturn_with_len(1) {
@@ -427,6 +436,20 @@ impl OutputTypeDetection for TxOut {
             && script_pubkey_bytes[3] == b'a'
             && script_pubkey_bytes[4] == b't'
             && script_pubkey_bytes[5] == b'h'
+    }
+
+    /// Checks if an output is an OP_RETURN output meeting the requirements
+    /// for a Syscoin AuxPoW merge mining output in a coinbase transaction.
+    ///
+    /// Format: OP_RETURN [length 0x27] [sys (0x737973)] [aux root (32 byte)] [Syscoin block height (4 byte, little endian)]
+    fn is_opreturn_syscoin(&self) -> bool {
+        let script_pubkey_bytes = self.script_pubkey.as_bytes();
+        script_pubkey_bytes.len() == 41
+            && script_pubkey_bytes[0] == 0x6A
+            && script_pubkey_bytes[1] == 0x27 // length (OP_PUSHBYTES_39)
+            && script_pubkey_bytes[2] == b's'
+            && script_pubkey_bytes[3] == b'y'
+            && script_pubkey_bytes[4] == b's'
     }
 
     /// Checks if an output is an OP_RETURN output meeting the requirements
@@ -725,6 +748,94 @@ mod tests {
         }
     }
 
+    /// Syscoin AuxPoW merge mining marker, as for example included in the
+    /// coinbase transactions of F2Pool.
+    ///
+    /// OP_RETURN OP_PUSHBYTES_39 'sys' <32 byte aux root> <4 byte height>
+    const SCRIPT_SYSCOIN_1: &str =
+        "6a277379736a0bcfd6c2ebfd3f9b68beb1bb883ac4b70608726ea313670b85d3949907783e78b91e00";
+    const SCRIPT_SYSCOIN_2: &str =
+        "6a27737973502a819c7feecbb335aaae4b23e87ee17880000663bb97ba2adabb94fbd35d521cd92300";
+
+    fn output_with_script_hex(hex_script: &str) -> TxOut {
+        output_with_script(ScriptBuf::from_bytes(hex::decode(hex_script).unwrap()))
+    }
+
+    #[test]
+    fn output_type_detection_opreturn_syscoin() {
+        for (i, hex_script) in [SCRIPT_SYSCOIN_1, SCRIPT_SYSCOIN_2].iter().enumerate() {
+            println!("Testing case {}", i);
+            let out = output_with_script_hex(hex_script);
+            assert_eq!(out.script_pubkey.len(), 41);
+            assert!(out.is_opreturn_syscoin());
+            assert_eq!(
+                out.get_type(),
+                OutputType::OpReturn(OpReturnFlavor::Syscoin)
+            );
+        }
+        assert_eq!(
+            OpReturnFlavor::Syscoin.to_string(),
+            "OP_RETURN (Syscoin merge mining info)"
+        );
+    }
+
+    /// Each of these differs from a valid Syscoin marker in exactly one way and
+    /// must not be detected as one.
+    #[test]
+    fn output_type_detection_opreturn_syscoin_near_misses() {
+        let valid = hex::decode(SCRIPT_SYSCOIN_1).unwrap();
+
+        // one byte too short: OP_PUSHBYTES_38 and 38 byte of data
+        let mut too_short = valid[..valid.len() - 1].to_vec();
+        too_short[1] = 0x26;
+        // one byte too long: OP_PUSHBYTES_40 and 40 byte of data
+        let mut too_long = valid.clone();
+        too_long[1] = 0x28;
+        too_long.push(0x00);
+        // wrong push byte, but still 41 byte in total
+        let mut wrong_push_byte = valid.clone();
+        wrong_push_byte[1] = 0x26;
+        // each of the three marker bytes flipped in turn
+        let mut wrong_marker_s = valid.clone();
+        wrong_marker_s[2] = b'S';
+        let mut wrong_marker_y = valid.clone();
+        wrong_marker_y[3] = b'Y';
+        let mut wrong_marker_s2 = valid.clone();
+        wrong_marker_s2[4] = b'S';
+
+        let testcases: Vec<(&str, Vec<u8>)> = vec![
+            ("one byte too short", too_short),
+            ("one byte too long", too_long),
+            ("wrong push byte", wrong_push_byte),
+            ("wrong marker byte 's'", wrong_marker_s),
+            ("wrong marker byte 'y'", wrong_marker_y),
+            ("wrong marker byte 's' (second)", wrong_marker_s2),
+        ];
+        for (name, script_bytes) in testcases.iter() {
+            println!("Testing case {}", name);
+            let out = output_with_script(ScriptBuf::from_bytes(script_bytes.clone()));
+            assert!(!out.is_opreturn_syscoin());
+            assert_ne!(
+                out.get_type(),
+                OutputType::OpReturn(OpReturnFlavor::Syscoin)
+            );
+        }
+    }
+
+    /// An OP_RETURN pushing 39 byte that don't start with the `sys` marker is
+    /// not a Syscoin marker, but still classified as some other flavor.
+    #[test]
+    fn output_type_detection_opreturn_39_byte_without_syscoin_marker() {
+        let out = opreturn_output(&[0xab; 39]);
+        assert_eq!(out.script_pubkey.len(), 41);
+        assert_eq!(out.script_pubkey.as_bytes()[1], 0x27);
+        assert!(!out.is_opreturn_syscoin());
+        assert_eq!(
+            out.get_type(),
+            OutputType::OpReturn(OpReturnFlavor::Unspecified)
+        );
+    }
+
     #[test]
     fn output_type_detection_opreturn_runestone() {
         let testcases: Vec<(usize, &str)> = vec![
@@ -805,6 +916,10 @@ mod tests {
             (
                 OpReturnFlavor::HathorNetwork,
                 "OP_RETURN (HathorNetwork aux_block_hash)",
+            ),
+            (
+                OpReturnFlavor::Syscoin,
+                "OP_RETURN (Syscoin merge mining info)",
             ),
             (OpReturnFlavor::Runestone, "OP_RETURN (Runestone)"),
         ];
