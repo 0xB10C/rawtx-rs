@@ -615,6 +615,70 @@ mod tests {
         }
     }
 
+    /// mainnet b10c0000004da5a9d1d9b4ae32e09f0b3e62d21a5cce5428d4ad714fb444eb5d
+    /// spends ten different input types and pays to nine different output
+    /// types, so a single transaction covers almost all of the type detection.
+    #[test]
+    fn many_input_and_output_types_in_one_transaction() {
+        use crate::input::InputType;
+        use crate::output::{OpReturnFlavor, OutputType};
+
+        let tx = decode_tx(testdata::TX_MANY_TYPES);
+        assert_eq!(
+            tx.compute_txid().to_string(),
+            "b10c0000004da5a9d1d9b4ae32e09f0b3e62d21a5cce5428d4ad714fb444eb5d"
+        );
+
+        let info = TxInfo::new(&tx).unwrap();
+
+        // Ten inputs, one per input type we detect.
+        assert_eq!(info.input_infos.len(), 10);
+        assert_eq!(
+            info.input_infos
+                .iter()
+                .map(|i| i.in_type)
+                .collect::<Vec<InputType>>(),
+            vec![
+                InputType::P2pk,
+                InputType::P2pkh,
+                InputType::P2ms,
+                InputType::P2sh,
+                InputType::P2shP2wpkh,
+                InputType::P2shP2wsh,
+                InputType::P2wpkh,
+                InputType::P2wsh,
+                InputType::P2trkp,
+                InputType::P2trsp,
+            ]
+        );
+
+        // Nine outputs, one per output type we detect.
+        assert_eq!(info.output_infos.len(), 9);
+        assert_eq!(
+            info.output_infos
+                .iter()
+                .map(|o| o.out_type)
+                .collect::<Vec<OutputType>>(),
+            vec![
+                OutputType::P2pk,
+                OutputType::P2pkh,
+                OutputType::P2ms,
+                OutputType::P2sh,
+                OutputType::P2wpkhV0,
+                OutputType::P2wshV0,
+                OutputType::P2tr,
+                OutputType::P2a,
+                OutputType::OpReturn(OpReturnFlavor::Unspecified),
+            ]
+        );
+
+        assert!(info.is_spending_segwit());
+        assert!(info.is_spending_taproot());
+        assert!(info.is_signaling_explicit_rbf_replicability());
+        assert!(!info.is_bip69_compliant());
+        assert!(!info.potentially_coinjoin());
+    }
+
     #[test]
     #[cfg(feature = "counterparty")]
     fn test_is_opreturn_counterparty_tx() {
