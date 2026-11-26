@@ -367,7 +367,10 @@ pub fn is_opreturn_counterparty(tx: &Transaction) -> bool {
                 // decrypt the payload with the txid as key
                 let mut rc4 = Rc4::new(key);
                 rc4.apply_keystream(&mut payload);
-                return payload.starts_with(&[0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59]);
+
+                if payload.starts_with(&[0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59]) {
+                    return true;
+                }
             }
         }
     }
@@ -745,6 +748,58 @@ mod tests {
                 is_opreturn_counterparty(&tx),
                 "not detected with leading junk OP_RETURN {}",
                 hex::encode(&junk)
+            );
+        }
+    }
+
+    /// A well-formed OP_RETURN output that doesn't carry CounterParty data (a
+    /// memo, an Omni marker, a Runestone, ...) is common. It must not stop the
+    /// scan for the actual CounterParty payload in a later output.
+    #[test]
+    #[cfg(feature = "counterparty")]
+    fn test_is_opreturn_counterparty_with_leading_non_counterparty_opreturn() {
+        use bitcoin::blockdata::opcodes::all::OP_RETURN;
+        use bitcoin::script::{Builder, PushBytesBuf};
+        use bitcoin::{Amount, TxOut};
+        use std::convert::TryFrom;
+
+        const CNTRPRTY: [u8; 8] = [0x43, 0x4e, 0x54, 0x52, 0x50, 0x52, 0x54, 0x59];
+
+        let mut plaintext = CNTRPRTY.to_vec();
+        plaintext.extend_from_slice(&[0x42; 52]);
+
+        // baseline: the transaction is detected without a decoy output
+        assert!(is_opreturn_counterparty(&counterparty_opreturn_tx(
+            &plaintext
+        )));
+
+        // Well formed OP_RETURN outputs pushing more than 8 bytes, but not a
+        // CounterParty payload: a 20 byte memo and a maximum length 80 byte
+        // push.
+        for decoy_push in [vec![0x61; 20], vec![0x61; 80]] {
+            let decoy = TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: Builder::new()
+                    .push_opcode(OP_RETURN)
+                    .push_slice(PushBytesBuf::try_from(decoy_push.clone()).unwrap())
+                    .into_script(),
+            };
+
+            let mut tx = counterparty_opreturn_tx(&plaintext);
+            tx.output.insert(0, decoy.clone());
+
+            assert!(tx.output[0].script_pubkey.is_op_return());
+            assert!(
+                !is_opreturn_counterparty(&Transaction {
+                    output: vec![decoy],
+                    ..tx.clone()
+                }),
+                "the decoy output alone must not be detected as CounterParty"
+            );
+            assert!(
+                is_opreturn_counterparty(&tx),
+                "not detected with a leading {} byte non-CounterParty OP_RETURN push",
+                decoy_push.len()
             );
         }
     }
