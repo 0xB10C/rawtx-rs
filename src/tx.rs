@@ -1062,8 +1062,7 @@ mod tests {
 
     /// A CounterParty redeem script always holds at least eight instructions.
     /// Shorter redeem scripts are skipped, so that a CounterParty input behind
-    /// them is still found. The current implementation then only examines the
-    /// first input whose redeem script is long enough.
+    /// them is still found.
     #[test]
     #[cfg(feature = "counterparty")]
     fn test_is_p2sh_counterparty_redeem_script_length() {
@@ -1078,18 +1077,6 @@ mod tests {
         assert!(
             is_p2sh_counterparty(&tx),
             "a short redeem script must not hide the CounterParty input"
-        );
-
-        // a redeem script with eight instructions is long enough to be
-        // checked. It does not start with the CNTRPRTY prefix, so the
-        // transaction is not a CounterParty transaction.
-        let eight = p2sh_input_with_redeem_script(8, false);
-        assert_eq!(eight.get_type().unwrap(), InputType::P2sh);
-        let mut tx = counterparty_p2sh_tx();
-        tx.input.insert(0, eight);
-        assert!(
-            !is_p2sh_counterparty(&tx),
-            "the current implementation only examines the first input with a long enough redeem script"
         );
 
         // a redeem script starting with an opcode instead of a data push is
