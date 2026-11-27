@@ -13,6 +13,12 @@ use crate::script::{
 pub const TAPROOT_ANNEX_INDICATOR: u8 = 0x50;
 pub const TAPROOT_LEAF_TAPSCRIPT: u8 = 0xc0;
 pub const TAPROOT_LEAF_MASK: u8 = 0xfe;
+// BIP-341 requires the taproot control block to have a length of 33 + 32m
+// bytes, for an m between 0 and 128 inclusive. The Merkle path is therefore
+// capped at 128 levels, which puts the longest valid control block at 4129
+// bytes.
+pub const TAPROOT_MAX_MERKLE_PATH_LEN: usize = 128;
+pub const TAPROOT_MAX_CONTROL_BLOCK_LEN: usize = 1 + 32 + 32 * TAPROOT_MAX_MERKLE_PATH_LEN;
 pub const ORDINALS_INSCRIPTION_MARKER: [u8; 3] = [0x6f, 0x72, 0x64]; // ASCII "ord"
 
 #[derive(Clone, Debug)]
@@ -825,7 +831,10 @@ impl InputTypeDetection for TxIn {
             Some(control_block) => control_block,
             None => return false,
         };
-        if control_block.len() < 1 + 32 || !(control_block.len() - 1).is_multiple_of(32) {
+        if control_block.len() < 1 + 32
+            || control_block.len() > TAPROOT_MAX_CONTROL_BLOCK_LEN
+            || !(control_block.len() - 1).is_multiple_of(32)
+        {
             return false;
         }
 
@@ -897,10 +906,10 @@ impl InputInscriptionDetection for TxIn {
 mod tests {
     use super::{
         InputInfo, InputInscriptionDetection, InputMultisigDetection, InputSigops, InputType,
-        InputTypeDetection, MultisigInputInfo,
+        InputTypeDetection, MultisigInputInfo, TAPROOT_LEAF_TAPSCRIPT,
     };
     use crate::testdata;
-    use bitcoin::Transaction;
+    use bitcoin::{Transaction, TxIn};
 
     fn decode_tx(hex: &str) -> Transaction {
         bitcoin::consensus::deserialize(&hex::decode(hex).unwrap()).unwrap()
@@ -1135,6 +1144,69 @@ mod tests {
         assert!(InputInfo::new(in0).unwrap().is_spending_taproot());
         assert!(InputInfo::new(in0).unwrap().is_spending_segwit());
         assert!(!in0.reveals_inscription().unwrap());
+    }
+
+    /// Builds a control block with a tapscript leaf version, an internal key
+    /// and a Merkle path of `m` 32 byte hashes. Its length is `33 + 32m`.
+    fn control_block_with_merkle_path_len(m: usize) -> Vec<u8> {
+        let mut control_block = vec![TAPROOT_LEAF_TAPSCRIPT];
+        control_block.extend_from_slice(&[0u8; 32]);
+        control_block.resize(33 + 32 * m, 0u8);
+        control_block
+    }
+
+    /// Builds a P2TR script-path spend input with the given control block as
+    /// the last witness item: `[ <signature> <script> <control block> ]`.
+    fn p2trsp_input_with_control_block(control_block: &[u8]) -> TxIn {
+        use bitcoin::{OutPoint, ScriptBuf, Sequence, Witness};
+
+        let sig = vec![0u8; 64];
+        let script = vec![0x51u8]; // OP_TRUE
+        let witness = Witness::from_slice(&[sig.as_slice(), script.as_slice(), control_block]);
+
+        TxIn {
+            previous_output: OutPoint::new(
+                bitcoin::Txid::from_raw_hash(bitcoin::hashes::Hash::from_byte_array([1u8; 32])),
+                0,
+            ),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness,
+        }
+    }
+
+    #[test]
+    fn p2trsp_input_detection_accepts_empty_merkle_path() {
+        // m = 0: a 33 byte control block is the shortest valid one.
+        let control_block = control_block_with_merkle_path_len(0);
+        assert_eq!(control_block.len(), 33);
+
+        let txin = p2trsp_input_with_control_block(&control_block);
+        assert!(txin.is_p2trsp());
+        assert_eq!(txin.get_type().unwrap(), InputType::P2trsp);
+    }
+
+    #[test]
+    fn p2trsp_input_detection_accepts_max_merkle_path() {
+        // m = 128: a 4129 byte control block is the longest BIP-341 allows.
+        let control_block = control_block_with_merkle_path_len(128);
+        assert_eq!(control_block.len(), 4129);
+
+        let txin = p2trsp_input_with_control_block(&control_block);
+        assert!(txin.is_p2trsp());
+        assert_eq!(txin.get_type().unwrap(), InputType::P2trsp);
+    }
+
+    #[test]
+    fn p2trsp_input_detection_rejects_too_long_control_block() {
+        // m = 129: a 4161 byte control block has the right shape, but exceeds
+        // the 128 level Merkle path cap of BIP-341.
+        let control_block = control_block_with_merkle_path_len(129);
+        assert_eq!(control_block.len(), 4161);
+
+        let txin = p2trsp_input_with_control_block(&control_block);
+        assert!(!txin.is_p2trsp());
+        assert_ne!(txin.get_type().unwrap(), InputType::P2trsp);
     }
 
     #[test]
