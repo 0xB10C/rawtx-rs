@@ -539,7 +539,13 @@ fn found_signatures_are_recognized_as_signatures() {
                         bytes.push(info.sig_hash);
                         assert!(bytes.is_ecdsa_signature(false));
                         assert!(bytes.is_signature());
-                        assert!(!bytes.is_schnorr_signature());
+                        // is_schnorr_signature() is a length check, so a
+                        // short DER signature of 64 or 65 bytes passes it
+                        // too. Two inputs of TX_MANY_TYPES have signatures
+                        // ground down that far.
+                        if !matches!(bytes.len(), 64 | 65) {
+                            assert!(!bytes.is_schnorr_signature());
+                        }
                     }
                     SignatureType::Schnorr(signature) => {
                         schnorr += 1;
